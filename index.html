@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Cyber Ninja: Studio Edition (Final)</title>
+    <title>Cyber Ninja: Tactical Edition</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
         body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #010103; font-family: monospace; user-select: none; }
@@ -13,49 +13,90 @@
 <body>
 
 <script>
+// --- WEB AUDIO API (Procedural Sound Effects) ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playSound(type) {
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    
+    const now = audioCtx.currentTime;
+    if(type === 'slash') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+        gain.gain.setValueAtTime(0.5, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'hit') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'deflect') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1200, now);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'level') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.setValueAtTime(600, now + 0.1);
+        osc.frequency.setValueAtTime(800, now + 0.2);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.4);
+        osc.start(now); osc.stop(now + 0.4);
+    } else if (type === 'crash') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(100, now);
+        osc.frequency.linearRampToValueAtTime(10, now + 0.5);
+        gain.gain.setValueAtTime(0.6, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.5);
+        osc.start(now); osc.stop(now + 0.5);
+    }
+}
+
+// --- CONFIG & DATA ---
 const config = {
-    type: Phaser.AUTO,
-    width: 400,
-    height: 700,
-    backgroundColor: '#010103',
+    type: Phaser.AUTO, width: 400, height: 700, backgroundColor: '#010103',
     physics: { default: 'arcade', arcade: { debug: false } },
     scene: { create: create, update: update }
 };
-
 const game = new Phaser.Game(config);
 
-// --- PERSISTENT RPG DATA ---
 let upgRadius = parseInt(localStorage.getItem('upg_radius')) || 1; 
 let upgCombo = parseInt(localStorage.getItem('upg_combo')) || 1;
 let upgDeflect = parseInt(localStorage.getItem('upg_deflect')) || 0;
 let totalShards = parseInt(localStorage.getItem('ninja_shards')) || 0;
 
-// --- STATE VARIABLES ---
-let player, enemies, bullets, bossGroup;
+let player, enemies, bullets, bossGroup, laserWalls;
 let particles, pathGraphics, trailGraphics, bgGrid;
 let score = 0, currentLevel = 1, combo = 0, enemiesAtStartOfDash = 0;
 let isDrawing = false, isDashing = false, isGameOver = false, hasRevived = false;
 let currentPath = [];
 let currentWeaponColor = 0x00ffff;
 
-// UI
-let uiScore, uiShards, uiLevel, gameOverContainer;
+let uiScore, uiShards, uiLevel, uiRank, uiObjective, gameOverContainer;
 
-const C_BULLET = 0xff3300, C_SHARD = 0x00ff88;
-const SKINS = [
-    { name: 'CYAN BLADE', color: 0x00ffff, cost: 0 },
-    { name: 'PLASMA GOLD', color: 0xffff00, cost: 50 },
-    { name: 'VOID PURPLE', color: 0xbd00ff, cost: 100 }
-];
+function getRank() {
+    if(totalShards > 1000) return "GHOST";
+    if(totalShards > 500) return "LEGEND";
+    if(totalShards > 250) return "ELITE";
+    if(totalShards > 100) return "ASSASSIN";
+    if(totalShards > 50) return "HUNTER";
+    return "ROOKIE";
+}
 
 function create() {
-    // 1. DYNAMIC ASSET GENERATION
     generateStudioAssets(this);
 
-    // 2. SCROLLING GRID
     bgGrid = this.add.grid(200, 350, 400, 1400, 40, 40, 0x010103, 1, 0x050518, 1);
 
-    // 3. VFX SYSTEMS
     particles = this.add.particles(0, 0, 'tex_particle', {
         speed: { min: 200, max: 600 }, angle: { min: 0, max: 360 },
         scale: { start: 0.8, end: 0 }, blendMode: 'ADD', lifespan: 400, emitting: false
@@ -64,28 +105,34 @@ function create() {
     pathGraphics = this.add.graphics();
     trailGraphics = this.add.graphics();
 
-    // 4. ACTOR SETUP
-    player = this.add.sprite(200, 550, 'tex_player');
+    player = this.add.sprite(200, 600, 'tex_player');
     this.physics.add.existing(player);
     player.body.setCircle(12, 4, 4);
     
     enemies = this.physics.add.group();
     bullets = this.physics.add.group();
     bossGroup = this.physics.add.group();
+    laserWalls = this.physics.add.group();
 
-    // 5. HUD
-    uiScore = this.add.text(20, 20, '0', { font: 'bold 36px Courier', fill: '#ffffff' }).setDepth(10);
+    // UI
+    uiScore = this.add.text(20, 30, '0', { font: 'bold 36px Courier', fill: '#ffffff' }).setDepth(10);
     uiScore.setShadow(0, 0, '#00ffff', 10, false, true);
     
-    uiShards = this.add.text(380, 25, '◆' + totalShards, { font: 'bold 20px Courier', fill: '#00ff88' }).setOrigin(1, 0).setDepth(10);
-    uiLevel = this.add.text(200, 25, 'STAGE 1', { font: 'bold 16px Courier', fill: '#888899' }).setOrigin(0.5).setDepth(10);
+    uiShards = this.add.text(380, 35, '◆' + totalShards, { font: 'bold 20px Courier', fill: '#00ff88' }).setOrigin(1, 0).setDepth(10);
+    uiLevel = this.add.text(200, 35, 'STAGE 1', { font: 'bold 16px Courier', fill: '#888899' }).setOrigin(0.5).setDepth(10);
+    uiObjective = this.add.text(200, 60, 'OBJECTIVE: ELIMINATE ALL', { font: 'bold 12px Courier', fill: '#ff0055' }).setOrigin(0.5).setDepth(10);
+    uiRank = this.add.text(20, 10, 'RANK: ' + getRank(), { font: 'bold 12px Courier', fill: '#bd00ff' }).setDepth(10);
     
     buildMetaUpgradeTerminal(this);
     startHandcraftedLevel(this);
 
-    // 6. PATH PLANNING INPUTS
+    // INPUTS
     this.input.on('pointerdown', (pointer) => {
         if (isGameOver || isDashing) return;
+        
+        // UNLOCK AUDIO CONTEXT ON FIRST CLICK
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+        
         isDrawing = true;
         currentPath = [{ x: player.x, y: player.y }];
         pathGraphics.clear();
@@ -115,7 +162,7 @@ function create() {
         else { pathGraphics.clear(); currentPath = []; }
     });
 
-    // 7. COLLISIONS
+    // COLLISIONS
     this.physics.add.overlap(player, enemies, (p, enemy) => {
         if (isDashing) sliceEnemyEntity(this, enemy);
         else if (!isDrawing) handleFatalImpact(this, enemy.x, enemy.y);
@@ -128,19 +175,27 @@ function create() {
         if (isDashing) damageBossCore(this, bSegment);
         else if (!isDrawing) handleFatalImpact(this, bSegment.x, bSegment.y);
     });
+    
+    // THE PUZZLE ELEMENT: Lasers
+    this.physics.add.overlap(player, laserWalls, (p, laser) => {
+        handleFatalImpact(this, player.x, player.y);
+    });
 }
 
 function update(time, delta) {
     if (isGameOver) return;
 
-    bgGrid.y += 1;
-    if (bgGrid.y > 700) bgGrid.y = 350;
+    bgGrid.y += 1; if (bgGrid.y > 700) bgGrid.y = 350;
+
+    // Rotate dynamic lasers
+    laserWalls.getChildren().forEach(l => {
+        if(l.rotSpeed) l.angle += l.rotSpeed;
+    });
 
     if (!isDrawing && !isDashing) {
         enemies.getChildren().forEach(e => {
             this.physics.moveToObject(e, player, e.speedData);
             e.rotation = Phaser.Math.Angle.Between(e.x, e.y, player.x, player.y);
-
             if (e.eType === 'SHOOTER' && time > e.nextFire) {
                 e.nextFire = time + 1800;
                 fireLaserProjectile(this, e.x, e.y, player.x, player.y, 200);
@@ -168,50 +223,28 @@ function update(time, delta) {
     }
 }
 
-// --- DYNAMIC TEXTURE GENERATOR ---
+// --- ASSET GEN ---
 function generateStudioAssets(scene) {
     let g = scene.make.graphics({x:0, y:0, add:false});
-    
-    // Player
-    g.fillStyle(0x222233); g.fillCircle(16, 16, 16);
-    g.fillStyle(0xffffff); g.fillRoundedRect(8, 10, 20, 8, 4);
-    g.generateTexture('tex_player', 32, 32); g.clear();
-
-    // Grunt
-    g.fillStyle(0xff0055); g.fillCircle(16, 16, 14);
-    g.fillStyle(0x000000); g.fillCircle(16, 16, 8);
-    g.fillStyle(0xffffff); g.fillCircle(16, 16, 4);
-    g.generateTexture('tex_grunt', 32, 32); g.clear();
-
-    // Runner
-    g.fillStyle(0xffff00); g.fillTriangle(0, 8, 24, 16, 0, 24);
-    g.generateTexture('tex_runner', 24, 32); g.clear();
-
-    // Shooter
-    g.fillStyle(0xbd00ff); g.fillRect(4, 4, 24, 24);
-    g.fillStyle(0xffffff); g.fillRect(12, 12, 8, 8);
-    g.generateTexture('tex_shooter', 32, 32); g.clear();
-
-    // Boss
-    g.lineStyle(6, 0xff0055); g.strokeCircle(48, 48, 40);
-    g.fillStyle(0x222233); g.fillCircle(48, 48, 30);
-    g.fillStyle(0xffffff); g.fillCircle(48, 48, 15);
-    g.generateTexture('tex_boss', 96, 96); g.clear();
-
-    // Particles
-    g.fillStyle(0xffffff); g.fillRect(0, 0, 8, 8);
-    g.generateTexture('tex_particle', 8, 8);
+    g.fillStyle(0x222233); g.fillCircle(16, 16, 16); g.fillStyle(0xffffff); g.fillRoundedRect(8, 10, 20, 8, 4); g.generateTexture('tex_player', 32, 32); g.clear();
+    g.fillStyle(0xff0055); g.fillCircle(16, 16, 14); g.fillStyle(0x000000); g.fillCircle(16, 16, 8); g.fillStyle(0xffffff); g.fillCircle(16, 16, 4); g.generateTexture('tex_grunt', 32, 32); g.clear();
+    g.fillStyle(0xffff00); g.fillTriangle(0, 8, 24, 16, 0, 24); g.generateTexture('tex_runner', 24, 32); g.clear();
+    g.fillStyle(0xbd00ff); g.fillRect(4, 4, 24, 24); g.fillStyle(0xffffff); g.fillRect(12, 12, 8, 8); g.generateTexture('tex_shooter', 32, 32); g.clear();
+    g.lineStyle(6, 0xff0055); g.strokeCircle(48, 48, 40); g.fillStyle(0x222233); g.fillCircle(48, 48, 30); g.fillStyle(0xffffff); g.fillCircle(48, 48, 15); g.generateTexture('tex_boss', 96, 96); g.clear();
+    g.fillStyle(0xffffff); g.fillRect(0, 0, 8, 8); g.generateTexture('tex_particle', 8, 8);
 }
 
-// --- INSTANT FLASH STEP ENGINE ---
+// --- FLASH STEP ---
 function executeInstantFlashStep(scene) {
-    isDashing = true;
-    combo = 0;
+    isDashing = true; combo = 0;
     enemiesAtStartOfDash = enemies.countActive() + bossGroup.countActive();
     pathGraphics.clear();
     
+    playSound('slash'); // AUDIO TRIGGER
+
     trailGraphics.clear();
-    let thickness = 16 + (upgRadius * 5);
+    // VISUAL FEEDBACK: Upgrade Radius makes the actual slash massive
+    let thickness = 10 + (upgRadius * 6);
     trailGraphics.lineStyle(thickness, currentWeaponColor, 1);
     trailGraphics.beginPath();
     trailGraphics.moveTo(currentPath[0].x, currentPath[0].y);
@@ -220,6 +253,8 @@ function executeInstantFlashStep(scene) {
 
     currentPath.forEach(pt => {
         player.setPosition(pt.x, pt.y);
+        scene.physics.overlap(player, laserWalls); // Dies if dashes through laser
+        if(isGameOver) return; // Stop checking if hit laser
         scene.physics.overlap(player, enemies);
         scene.physics.overlap(player, bullets);
         scene.physics.overlap(player, bossGroup);
@@ -227,36 +262,28 @@ function executeInstantFlashStep(scene) {
 
     currentPath = [];
 
-    // BUG FIX 1: 50ms delay before ending the dash so physics can process kills perfectly
-    scene.time.delayedCall(50, () => {
-        isDashing = false;
-    });
+    scene.time.delayedCall(50, () => { isDashing = false; });
 
-    scene.tweens.add({
-        targets: trailGraphics, alpha: 0, duration: 150,
-        onComplete: () => { trailGraphics.clear(); trailGraphics.setAlpha(1); }
-    });
+    scene.tweens.add({ targets: trailGraphics, alpha: 0, duration: 150, onComplete: () => { trailGraphics.clear(); trailGraphics.setAlpha(1); } });
 }
 
 function sliceEnemyEntity(scene, enemy) {
     if (enemy.eType === 'SHIELD' && !enemy.isBroken) {
-        enemy.isBroken = true;
-        enemy.setTint(0xffffff);
+        enemy.isBroken = true; enemy.setTint(0xffffff);
         spawnFloatingText(scene, enemy.x, enemy.y, 'SHIELD BREAK', '#ffffff');
+        playSound('hit');
         return;
     }
 
     combo++;
-    let rewardMultiplier = 1 + (upgCombo * 0.2);
-    let points = Math.floor((100 * combo) * rewardMultiplier);
-    score += points;
-    uiScore.setText(score);
+    let points = Math.floor((100 * combo) * (1 + (upgCombo * 0.2)));
+    score += points; uiScore.setText(score);
     
-    scene.physics.world.pause();
-    setTimeout(() => { scene.physics.world.resume(); }, 40);
+    playSound('hit'); // AUDIO TRIGGER
 
-    particles.setParticleTint(0xffffff);
-    particles.emitParticleAt(enemy.x, enemy.y, 30);
+    scene.physics.world.pause(); setTimeout(() => { scene.physics.world.resume(); }, 40);
+
+    particles.setParticleTint(0xffffff); particles.emitParticleAt(enemy.x, enemy.y, 30);
     scene.cameras.main.shake(60, 0.02);
     
     triggerFloatingComboPhrase(scene, enemy.x, enemy.y, points);
@@ -269,67 +296,73 @@ function sliceEnemyEntity(scene, enemy) {
 function damageBossCore(scene, segment) {
     segment.hp -= 1;
     scene.cameras.main.shake(80, 0.03);
-    particles.setParticleTint(0xffffff);
-    particles.emitParticleAt(segment.x, segment.y, 20);
+    particles.setParticleTint(0xffffff); particles.emitParticleAt(segment.x, segment.y, 20);
+    playSound('hit');
 
-    scene.physics.world.pause();
-    setTimeout(() => { scene.physics.world.resume(); }, 50);
+    scene.physics.world.pause(); setTimeout(() => { scene.physics.world.resume(); }, 50);
 
     if (segment.hp <= 0) {
         combo += 5; score += 5000; uiScore.setText(score);
         spawnFloatingText(scene, segment.x, segment.y, 'CORE DESTROYED', '#ffff00');
         spawnShardBankPayout(scene, segment.x, segment.y, 15);
-        segment.destroy();
-        evaluateLevelCompletion(scene);
+        segment.destroy(); evaluateLevelCompletion(scene);
     } else {
         spawnFloatingText(scene, segment.x, segment.y, `ARMOR: ${segment.hp}`, '#ff0055');
     }
 }
 
 function executeBulletDeflection(scene, bullet) {
-    bullet.destroy();
-    score += 50; uiScore.setText(score);
-    particles.setParticleTint(C_BULLET);
-    particles.emitParticleAt(bullet.x, bullet.y, 10);
-    
-    if (upgDeflect > 0 && Phaser.Math.Between(1, 100) <= (upgDeflect * 15)) {
-        spawnShardBankPayout(scene, bullet.x, bullet.y, 1);
-    }
+    bullet.destroy(); score += 50; uiScore.setText(score);
+    particles.setParticleTint(C_BULLET); particles.emitParticleAt(bullet.x, bullet.y, 10);
+    playSound('deflect'); // AUDIO TRIGGER
+    if (upgDeflect > 0 && Phaser.Math.Between(1, 100) <= (upgDeflect * 15)) spawnShardBankPayout(scene, bullet.x, bullet.y, 1);
 }
 
-// --- STAGE PROGRESSION ---
+// --- LEVELS & OBSTACLES ---
 function startHandcraftedLevel(scene) {
     uiLevel.setText(`STAGE ${currentLevel}`);
-    enemies.clear(true, true); bullets.clear(true, true); bossGroup.clear(true, true);
+    uiRank.setText('RANK: ' + getRank());
+    enemies.clear(true, true); bullets.clear(true, true); bossGroup.clear(true, true); laserWalls.clear(true, true);
 
     if (currentLevel === 1) {
+        uiObjective.setText('OBJECTIVE: ELIMINATE GRUNTS');
         spawnTarget(scene, 100, 200, 'GRUNT', 40); spawnTarget(scene, 300, 200, 'GRUNT', 40);
         spawnTarget(scene, 200, 350, 'GRUNT', 40);
     } 
     else if (currentLevel === 2) {
+        uiObjective.setText('OBJECTIVE: CATCH RUNNERS');
         spawnTarget(scene, 100, 200, 'GRUNT', 50); spawnTarget(scene, 300, 200, 'GRUNT', 50);
         spawnTarget(scene, 200, 150, 'RUNNER', 90);
     } 
     else if (currentLevel === 3) {
-        spawnTarget(scene, 150, 200, 'SHIELD', 45); spawnTarget(scene, 250, 200, 'SHIELD', 45);
-        spawnTarget(scene, 200, 100, 'RUNNER', 100);
+        uiObjective.setText('OBJECTIVE: AVOID LASER WALL');
+        spawnStaticLaser(scene, 200, 250, 300, 8); // PUZZLE OBSTACLE
+        spawnTarget(scene, 100, 150, 'GRUNT', 40); spawnTarget(scene, 300, 150, 'GRUNT', 40);
+        spawnTarget(scene, 200, 350, 'RUNNER', 100);
     } 
     else if (currentLevel === 4) {
+        uiObjective.setText('OBJECTIVE: DEFLECT BULLETS');
         spawnTarget(scene, 100, 150, 'SHOOTER', 30); spawnTarget(scene, 300, 150, 'SHOOTER', 30);
-        spawnTarget(scene, 200, 300, 'GRUNT', 60);
     } 
     else if (currentLevel === 5) {
-        let b = scene.add.sprite(200, 200, 'tex_boss');
-        scene.physics.add.existing(b);
-        b.body.setCircle(40, 8, 8);
-        b.hp = 8; b.nextFire = scene.time.now + 1000;
-        bossGroup.add(b);
-        spawnFloatingText(scene, 200, 110, '!!! WARNING: CORE SENTINEL !!!', '#ff0055');
+        uiObjective.setText('OBJECTIVE: DESTROY CORE');
+        let b = scene.add.sprite(200, 200, 'tex_boss'); scene.physics.add.existing(b);
+        b.body.setCircle(40, 8, 8); b.hp = 8; b.nextFire = scene.time.now + 1000; bossGroup.add(b);
     } 
+    else if (currentLevel === 6) {
+        uiObjective.setText('OBJECTIVE: ROTATING DANGER');
+        spawnRotatingLaser(scene, 200, 300, 250, 8, 1); // ROTATING PUZZLE
+        spawnTarget(scene, 50, 150, 'SHOOTER', 30); spawnTarget(scene, 350, 150, 'SHOOTER', 30);
+    }
     else {
+        uiObjective.setText('OBJECTIVE: SURVIVE');
+        // Randomly spawn obstacles
+        if(Phaser.Math.Between(0,100) > 50) spawnRotatingLaser(scene, 200, 350, 200, 8, 1.5);
+        else spawnStaticLaser(scene, 200, Phaser.Math.Between(200, 400), 250, 8);
+
         let total = Math.min(18, 3 + Math.floor(currentLevel * 0.6));
         for (let i = 0; i < total; i++) {
-            let rx = Phaser.Math.Between(40, 360), ry = Phaser.Math.Between(120, 500);
+            let rx = Phaser.Math.Between(40, 360), ry = Phaser.Math.Between(100, 500);
             let typeChance = Phaser.Math.Between(0, 100);
             if (typeChance < 30) spawnTarget(scene, rx, ry, 'RUNNER', 100 + currentLevel);
             else if (typeChance > 80) spawnTarget(scene, rx, ry, 'SHOOTER', 35);
@@ -339,18 +372,22 @@ function startHandcraftedLevel(scene) {
 }
 
 function spawnTarget(scene, x, y, type, speed) {
-    let e;
-    if (type === 'GRUNT') { e = scene.add.sprite(x, y, 'tex_grunt'); e.body = scene.physics.add.existing(e).body; e.body.setCircle(14, 2, 2); }
-    if (type === 'RUNNER') { e = scene.add.sprite(x, y, 'tex_runner'); e.body = scene.physics.add.existing(e).body; e.body.setCircle(10, 2, 6); }
-    if (type === 'SHOOTER') { e = scene.add.sprite(x, y, 'tex_shooter'); e.body = scene.physics.add.existing(e).body; e.body.setCircle(14, 2, 2); e.nextFire = scene.time.now + 1000; }
-    if (type === 'SHIELD') { e = scene.add.sprite(x, y, 'tex_grunt').setTint(0x00ffff); e.body = scene.physics.add.existing(e).body; e.body.setCircle(14, 2, 2); e.isBroken = false; }
-    
+    let e = scene.add.sprite(x, y, type==='GRUNT'?'tex_grunt':type==='RUNNER'?'tex_runner':'tex_shooter');
+    scene.physics.add.existing(e); e.body.setCircle(14, 2, 2);
+    if(type === 'SHIELD') { e.setTexture('tex_grunt'); e.setTint(0x00ffff); e.isBroken = false; }
+    if(type === 'SHOOTER') e.nextFire = scene.time.now + 1000;
     e.eType = type; e.speedData = speed; enemies.add(e);
 }
-
 function fireLaserProjectile(scene, sx, sy, tx, ty, speed) {
-    let b = scene.add.rectangle(sx, sy, 8, 8, C_BULLET);
-    scene.physics.add.existing(b); scene.physics.moveTo(b, tx, ty, speed); bullets.add(b);
+    let b = scene.add.rectangle(sx, sy, 8, 8, C_BULLET); scene.physics.add.existing(b); scene.physics.moveTo(b, tx, ty, speed); bullets.add(b);
+}
+function spawnStaticLaser(scene, x, y, w, h) {
+    let l = scene.add.rectangle(x, y, w, h, 0xff0000).setAlpha(0.7);
+    scene.physics.add.existing(l); lasers.add(l); laserWalls.add(l);
+}
+function spawnRotatingLaser(scene, x, y, w, h, speed) {
+    let l = scene.add.rectangle(x, y, w, h, 0xff0000).setAlpha(0.7);
+    scene.physics.add.existing(l); l.rotSpeed = speed; laserWalls.add(l);
 }
 
 function evaluateLevelCompletion(scene) {
@@ -360,37 +397,27 @@ function evaluateLevelCompletion(scene) {
             spawnFloatingText(scene, 200, 320, 'PERFECT ONE SLASH\n+1500', '#00ffff');
         }
         currentLevel++;
-        scene.time.delayedCall(400, () => startHandcraftedLevel(scene));
+        playSound('level'); // AUDIO TRIGGER
+        scene.time.delayedCall(800, () => startHandcraftedLevel(scene));
     }
 }
 
-// --- REWARDS & METAGAME INTERFACE ---
+// --- META & UI ---
 function spawnShardBankPayout(scene, x, y, count) {
     for (let i = 0; i < count; i++) {
         let s = scene.add.rectangle(x, y, 6, 6, C_SHARD);
-        scene.tweens.add({
-            targets: s, x: x + Phaser.Math.Between(-30, 30), y: y + Phaser.Math.Between(-30, 30), duration: 150,
-            onComplete: () => {
-                scene.tweens.add({
-                    targets: s, x: 360, y: 35, duration: 400, ease: 'Back.easeIn',
-                    onComplete: () => {
-                        totalShards++; localStorage.setItem('ninja_shards', totalShards);
-                        uiShards.setText('◆' + totalShards); s.destroy();
-                    }
-                });
-            }
-        });
+        scene.tweens.add({ targets: s, x: x + Phaser.Math.Between(-30, 30), y: y + Phaser.Math.Between(-30, 30), duration: 150, onComplete: () => {
+            scene.tweens.add({ targets: s, x: 360, y: 35, duration: 400, ease: 'Back.easeIn', onComplete: () => {
+                totalShards++; localStorage.setItem('ninja_shards', totalShards); uiShards.setText('◆' + totalShards); s.destroy();
+            }});
+        }});
     }
 }
-
 function triggerFloatingComboPhrase(scene, x, y, points) {
     let phrase = `+${points}`;
-    if (combo >= 12) phrase = `LEGENDARY!\n+${points}`;
-    else if (combo >= 8) phrase = `AWESOME!\n+${points}`;
-    else if (combo >= 4) phrase = `GREAT!\n+${points}`;
+    if (combo >= 12) phrase = `LEGENDARY!\n+${points}`; else if (combo >= 8) phrase = `AWESOME!\n+${points}`; else if (combo >= 4) phrase = `GREAT!\n+${points}`;
     spawnFloatingText(scene, x, y, phrase, '#ffff00');
 }
-
 function spawnFloatingText(scene, x, y, msg, color) {
     let t = scene.add.text(x, y, msg, { font: 'bold 14px Courier', fill: color, align: 'center' }).setOrigin(0.5).setDepth(15);
     t.setShadow(0, 0, color, 8, false, true);
@@ -398,10 +425,9 @@ function spawnFloatingText(scene, x, y, msg, color) {
 }
 
 function handleFatalImpact(scene, x, y) {
-    isGameOver = true;
-    player.setVisible(false);
-    particles.setParticleTint(currentWeaponColor);
-    particles.emitParticleAt(player.x, player.y, 40);
+    isGameOver = true; player.setVisible(false);
+    playSound('crash'); // AUDIO TRIGGER
+    particles.setParticleTint(currentWeaponColor); particles.emitParticleAt(player.x, player.y, 40);
     scene.cameras.main.shake(250, 0.05);
 
     updateTerminalDisplayLayout();
@@ -413,7 +439,6 @@ function buildMetaUpgradeTerminal(scene) {
     let bg = scene.add.rectangle(0, 0, 340, 560, 0x010106, 0.98).setStrokeStyle(2, 0xff0055);
     let title = scene.add.text(0, -240, 'SYSTEM OVERRIDE', { font: 'bold 24px Courier', fill: '#ff0055' }).setOrigin(0.5);
     let stats = scene.add.text(0, -190, '', { font: 'bold 16px Courier', fill: '#ffffff', align: 'center' }).setOrigin(0.5).setName('statsText');
-    
     gameOverContainer.add([bg, title, stats]);
 
     let upgData = [
@@ -426,10 +451,8 @@ function buildMetaUpgradeTerminal(scene) {
         let btnY = -80 + (idx * 60);
         let btn = scene.add.rectangle(0, btnY, 280, 45, 0x0a0a20).setStrokeStyle(1, 0x333366).setInteractive();
         let txt = scene.add.text(0, btnY, '', { font: 'bold 12px Courier', fill: '#fff' }).setOrigin(0.5);
-        
         btn.on('pointerdown', () => {
-            let currentLvl = u.get();
-            if (currentLvl >= 5) return;
+            let currentLvl = u.get(); if (currentLvl >= 5) return;
             let cost = (currentLvl + 1) * 35;
             if (totalShards >= cost) {
                 totalShards -= cost; u.set(currentLvl + 1);
@@ -437,8 +460,7 @@ function buildMetaUpgradeTerminal(scene) {
                 uiShards.setText('◆' + totalShards); updateTerminalDisplayLayout();
             }
         });
-        gameOverContainer.add([btn, txt]);
-        u.btnRef = btn; u.txtRef = txt;
+        gameOverContainer.add([btn, txt]); u.btnRef = btn; u.txtRef = txt;
     });
     gameOverContainer.upgData = upgData;
 
@@ -447,58 +469,31 @@ function buildMetaUpgradeTerminal(scene) {
     adBtn.on('pointerdown', () => {
         if (hasRevived) return;
         hasRevived = true; isGameOver = false;
-        player.setPosition(200, 550).setVisible(true);
-        gameOverContainer.setVisible(false);
-        spawnFloatingText(scene, 200, 350, 'SYSTEM RESTORED', '#00ffff');
+        player.setPosition(200, 600).setVisible(true);
+        gameOverContainer.setVisible(false); spawnFloatingText(scene, 200, 350, 'SYSTEM RESTORED', '#00ffff');
     });
-    gameOverContainer.add([adBtn, adTxt]);
-    gameOverContainer.adBtn = adBtn; gameOverContainer.adTxt = adTxt;
+    gameOverContainer.add([adBtn, adTxt]); gameOverContainer.adBtn = adBtn; gameOverContainer.adTxt = adTxt;
 
     let retryBtn = scene.add.rectangle(0, 210, 280, 55, 0x00ffff, 0.1).setStrokeStyle(2, 0x00ffff).setInteractive();
     let retryTxt = scene.add.text(0, 210, '> REBOOT CORE <', { font: 'bold 18px Courier', fill: '#00ffff' }).setOrigin(0.5);
-    
-    // BUG FIX 2: Gentle, smooth breathing animation for the retry button
-    scene.tweens.add({
-        targets: [retryBtn, retryTxt],
-        alpha: { from: 1, to: 0.7 },
-        scale: { from: 1, to: 1.05 },
-        yoyo: true,
-        repeat: -1,
-        duration: 800,
-        ease: 'Sine.easeInOut'
-    });
-
+    scene.tweens.add({ targets: [retryBtn, retryTxt], alpha: { from: 1, to: 0.7 }, scale: { from: 1, to: 1.05 }, yoyo: true, repeat: -1, duration: 800, ease: 'Sine.easeInOut' });
     retryBtn.on('pointerdown', () => {
-        isGameOver = false; score = 0; currentLevel = 1; hasRevived = false;
-        uiScore.setText('0');
-        player.setPosition(200, 550).setVisible(true);
-        gameOverContainer.setVisible(false);
-        startHandcraftedLevel(scene);
+        isGameOver = false; score = 0; currentLevel = 1; hasRevived = false; uiScore.setText('0');
+        player.setPosition(200, 600).setVisible(true);
+        gameOverContainer.setVisible(false); startHandcraftedLevel(scene);
     });
     gameOverContainer.add([retryBtn, retryTxt]);
 }
 
 function updateTerminalDisplayLayout() {
     gameOverContainer.getByName('statsText').setText(`STAGE REACHED: ${currentLevel}\nTOTAL DATA: ${score}`);
-    
     gameOverContainer.upgData.forEach(u => {
         let lvl = u.get();
-        if (lvl >= 5) {
-            u.txtRef.setText(`${u.name}: MAX LEVEL`); u.btnRef.setStrokeStyle(2, 0x00ff88);
-        } else {
-            let cost = (lvl + 1) * 35;
-            u.txtRef.setText(`UPGRADE ${u.name} (LVL ${lvl}/5)\nCOST: ◆${cost}`);
-            u.btnRef.setStrokeStyle(1, totalShards >= cost ? 0x00ffff : 0x442222);
-        }
+        if (lvl >= 5) { u.txtRef.setText(`${u.name}: MAX LEVEL`); u.btnRef.setStrokeStyle(2, 0x00ff88); } 
+        else { let cost = (lvl + 1) * 35; u.txtRef.setText(`UPGRADE ${u.name} (LVL ${lvl}/5)\nCOST: ◆${cost}`); u.btnRef.setStrokeStyle(1, totalShards >= cost ? 0x00ffff : 0x442222); }
     });
-
-    if (hasRevived) {
-        gameOverContainer.adBtn.setAlpha(0.2).disableInteractive();
-        gameOverContainer.adTxt.setText('REVIVE UNAVAILABLE');
-    } else {
-        gameOverContainer.adBtn.setAlpha(1).setInteractive();
-        gameOverContainer.adTxt.setText('🎬 WATCH AD: FREE REVIVE');
-    }
+    if (hasRevived) { gameOverContainer.adBtn.setAlpha(0.2).disableInteractive(); gameOverContainer.adTxt.setText('REVIVE UNAVAILABLE'); } 
+    else { gameOverContainer.adBtn.setAlpha(1).setInteractive(); gameOverContainer.adTxt.setText('🎬 WATCH AD: FREE REVIVE'); }
 }
 </script>
 </body>
