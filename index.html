@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Cyber Ninja: Tactical Edition</title>
+    <title>Cyber Ninja: Final Master</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
         body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #010103; font-family: monospace; user-select: none; }
@@ -13,86 +13,62 @@
 <body>
 
 <script>
-// --- WEB AUDIO API (Procedural Sound Effects) ---
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-function playSound(type) {
-    if(audioCtx.state === 'suspended') audioCtx.resume();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    const now = audioCtx.currentTime;
-    if(type === 'slash') {
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(800, now);
-        osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
-        gain.gain.setValueAtTime(0.5, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-        osc.start(now); osc.stop(now + 0.1);
-    } else if (type === 'hit') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(150, now);
-        osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
-        gain.gain.setValueAtTime(0.4, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-        osc.start(now); osc.stop(now + 0.15);
-    } else if (type === 'deflect') {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(1200, now);
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-        osc.start(now); osc.stop(now + 0.1);
-    } else if (type === 'level') {
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(400, now);
-        osc.frequency.setValueAtTime(600, now + 0.1);
-        osc.frequency.setValueAtTime(800, now + 0.2);
-        gain.gain.setValueAtTime(0.2, now);
-        gain.gain.linearRampToValueAtTime(0, now + 0.4);
-        osc.start(now); osc.stop(now + 0.4);
-    } else if (type === 'crash') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(100, now);
-        osc.frequency.linearRampToValueAtTime(10, now + 0.5);
-        gain.gain.setValueAtTime(0.6, now);
-        gain.gain.linearRampToValueAtTime(0, now + 0.5);
-        osc.start(now); osc.stop(now + 0.5);
-    }
-}
-
-// --- CONFIG & DATA ---
 const config = {
     type: Phaser.AUTO, width: 400, height: 700, backgroundColor: '#010103',
     physics: { default: 'arcade', arcade: { debug: false } },
-    scene: { create: create, update: update }
+    scene: { preload: preload, create: create, update: update }
 };
+
 const game = new Phaser.Game(config);
 
+// --- RPG DATA ---
 let upgRadius = parseInt(localStorage.getItem('upg_radius')) || 1; 
 let upgCombo = parseInt(localStorage.getItem('upg_combo')) || 1;
 let upgDeflect = parseInt(localStorage.getItem('upg_deflect')) || 0;
 let totalShards = parseInt(localStorage.getItem('ninja_shards')) || 0;
 
+// --- STATE VARIABLES ---
 let player, enemies, bullets, bossGroup, laserWalls;
 let particles, pathGraphics, trailGraphics, bgGrid;
 let score = 0, currentLevel = 1, combo = 0, enemiesAtStartOfDash = 0;
-let isDrawing = false, isDashing = false, isGameOver = false, hasRevived = false;
+
+// BUG FIX: Added isInvulnerable state to prevent unfair deaths
+let isDrawing = false, isDashing = false, isInvulnerable = false, isGameOver = false, hasRevived = false;
 let currentPath = [];
 let currentWeaponColor = 0x00ffff;
+let useSprites = false; // Smart tracker for PNG loading
 
-let uiScore, uiShards, uiLevel, uiRank, uiObjective, gameOverContainer;
+let uiScore, uiShards, uiLevel, gameOverContainer;
+const C_BULLET = 0xff3300, C_SHARD = 0x00ff88;
 
-function getRank() {
-    if(totalShards > 1000) return "GHOST";
-    if(totalShards > 500) return "LEGEND";
-    if(totalShards > 250) return "ELITE";
-    if(totalShards > 100) return "ASSASSIN";
-    if(totalShards > 50) return "HUNTER";
-    return "ROOKIE";
+const SKINS = [
+    { name: 'CYAN BLADE', color: 0x00ffff, cost: 0 },
+    { name: 'PLASMA GOLD', color: 0xffff00, cost: 50 },
+    { name: 'VOID PURPLE', color: 0xbd00ff, cost: 100 }
+];
+
+// --- SMART ASSET FETCHING SCRIPT ---
+function preload() {
+    // 1. Try to fetch the local PNG files
+    this.load.spritesheet('ninja_sheet', 'ninja.png', { frameWidth: 150, frameHeight: 150 });
+    this.load.spritesheet('enemies_sheet', 'enemies.png', { frameWidth: 120, frameHeight: 120 });
+
+    // 2. Error Processing: If CORS blocks the files, catch it!
+    this.load.on('loaderror', (fileObj) => {
+        console.warn('Security Blocked PNG: ' + fileObj.key + '. Using generated graphics instead.');
+        useSprites = false;
+    });
+
+    // 3. Success Processing: If files load correctly
+    this.load.on('complete', () => {
+        if (this.textures.exists('ninja_sheet') && this.textures.exists('enemies_sheet')) {
+            useSprites = true;
+        }
+    });
 }
 
 function create() {
+    // Generate fallback graphics just in case PNGs failed
     generateStudioAssets(this);
 
     bgGrid = this.add.grid(200, 350, 400, 1400, 40, 40, 0x010103, 1, 0x050518, 1);
@@ -102,42 +78,50 @@ function create() {
         scale: { start: 0.8, end: 0 }, blendMode: 'ADD', lifespan: 400, emitting: false
     });
 
-    pathGraphics = this.add.graphics();
-    trailGraphics = this.add.graphics();
+    pathGraphics = this.add.graphics(); trailGraphics = this.add.graphics();
+    enemies = this.physics.add.group(); bullets = this.physics.add.group();
+    bossGroup = this.physics.add.group(); laserWalls = this.physics.add.group();
 
-    player = this.add.sprite(200, 600, 'tex_player');
+    // Process Animations if PNGs loaded
+    if (useSprites) {
+        this.anims.create({ key: 'n_idle', frames: this.anims.generateFrameNumbers('ninja_sheet', { start: 0, end: 7 }), frameRate: 10, repeat: -1 });
+        this.anims.create({ key: 'n_run', frames: this.anims.generateFrameNumbers('ninja_sheet', { start: 8, end: 15 }), frameRate: 12, repeat: -1 });
+        this.anims.create({ key: 'n_attack', frames: this.anims.generateFrameNumbers('ninja_sheet', { start: 16, end: 27 }), frameRate: 24, repeat: 0 });
+        this.anims.create({ key: 'e_grunt', frames: this.anims.generateFrameNumbers('enemies_sheet', { start: 0, end: 5 }), frameRate: 10, repeat: -1 });
+        this.anims.create({ key: 'e_runner', frames: this.anims.generateFrameNumbers('enemies_sheet', { start: 6, end: 11 }), frameRate: 14, repeat: -1 });
+        this.anims.create({ key: 'e_shooter', frames: this.anims.generateFrameNumbers('enemies_sheet', { start: 18, end: 23 }), frameRate: 8, repeat: -1 });
+        
+        player = this.add.sprite(200, 550, 'ninja_sheet').setScale(0.4);
+        player.play('n_idle');
+    } else {
+        player = this.add.sprite(200, 550, 'tex_player');
+    }
+
     this.physics.add.existing(player);
-    player.body.setCircle(12, 4, 4);
-    
-    enemies = this.physics.add.group();
-    bullets = this.physics.add.group();
-    bossGroup = this.physics.add.group();
-    laserWalls = this.physics.add.group();
+    player.body.setCircle(15, 15, 15); // Strict, small hitbox
 
     // UI
-    uiScore = this.add.text(20, 30, '0', { font: 'bold 36px Courier', fill: '#ffffff' }).setDepth(10);
+    uiScore = this.add.text(20, 20, '0', { font: 'bold 36px Courier', fill: '#ffffff' }).setDepth(10);
     uiScore.setShadow(0, 0, '#00ffff', 10, false, true);
+    uiShards = this.add.text(380, 25, '◆' + totalShards, { font: 'bold 20px Courier', fill: '#00ff88' }).setOrigin(1, 0).setDepth(10);
+    uiLevel = this.add.text(200, 25, 'STAGE 1', { font: 'bold 16px Courier', fill: '#888899' }).setOrigin(0.5).setDepth(10);
     
-    uiShards = this.add.text(380, 35, '◆' + totalShards, { font: 'bold 20px Courier', fill: '#00ff88' }).setOrigin(1, 0).setDepth(10);
-    uiLevel = this.add.text(200, 35, 'STAGE 1', { font: 'bold 16px Courier', fill: '#888899' }).setOrigin(0.5).setDepth(10);
-    uiObjective = this.add.text(200, 60, 'OBJECTIVE: ELIMINATE ALL', { font: 'bold 12px Courier', fill: '#ff0055' }).setOrigin(0.5).setDepth(10);
-    uiRank = this.add.text(20, 10, 'RANK: ' + getRank(), { font: 'bold 12px Courier', fill: '#bd00ff' }).setDepth(10);
-    
+    // Show warning if PNGs failed
+    if(!useSprites) {
+        this.add.text(200, 50, 'CORS SECURITY BLOCK ACTIVE\nUsing Fallback Graphics', { font: '10px Courier', fill: '#ff0000', align: 'center' }).setOrigin(0.5).setDepth(10);
+    }
+
     buildMetaUpgradeTerminal(this);
     startHandcraftedLevel(this);
 
     // INPUTS
-    this.input.on('pointerdown', (pointer) => {
+    this.input.on('pointerdown', () => {
         if (isGameOver || isDashing) return;
-        
-        // UNLOCK AUDIO CONTEXT ON FIRST CLICK
-        if(audioCtx.state === 'suspended') audioCtx.resume();
-        
         isDrawing = true;
+        if(useSprites) player.play('n_run', true);
         currentPath = [{ x: player.x, y: player.y }];
-        pathGraphics.clear();
-        pathGraphics.lineStyle(3, currentWeaponColor, 0.9);
-        player.setScale(1.2); 
+        pathGraphics.clear(); pathGraphics.lineStyle(3, currentWeaponColor, 0.9);
+        player.setScale(useSprites ? 0.45 : 1.2); 
     });
 
     this.input.on('pointermove', (pointer) => {
@@ -145,10 +129,8 @@ function create() {
         let lastPt = currentPath[currentPath.length - 1];
         if (Phaser.Math.Distance.Between(lastPt.x, lastPt.y, pointer.x, pointer.y) > 15) {
             currentPath.push({ x: pointer.x, y: pointer.y });
-            pathGraphics.clear();
-            pathGraphics.lineStyle(4, currentWeaponColor, 0.9);
-            pathGraphics.beginPath();
-            pathGraphics.moveTo(currentPath[0].x, currentPath[0].y);
+            pathGraphics.clear(); pathGraphics.lineStyle(4, currentWeaponColor, 0.9);
+            pathGraphics.beginPath(); pathGraphics.moveTo(currentPath[0].x, currentPath[0].y);
             currentPath.forEach(pt => pathGraphics.lineTo(pt.x, pt.y));
             pathGraphics.strokePath();
         }
@@ -157,27 +139,28 @@ function create() {
     this.input.on('pointerup', () => {
         if (!isDrawing) return;
         isDrawing = false;
-        player.setScale(1);
+        player.setScale(useSprites ? 0.4 : 1);
         if (currentPath.length > 2) executeInstantFlashStep(this);
-        else { pathGraphics.clear(); currentPath = []; }
+        else { 
+            pathGraphics.clear(); currentPath = []; 
+            if(useSprites) player.play('n_idle', true);
+        }
     });
 
-    // COLLISIONS
+    // BUG FIX: Adjusted overlapping rules for invulnerability
     this.physics.add.overlap(player, enemies, (p, enemy) => {
-        if (isDashing) sliceEnemyEntity(this, enemy);
+        if (isDashing || isInvulnerable) sliceEnemyEntity(this, enemy);
         else if (!isDrawing) handleFatalImpact(this, enemy.x, enemy.y);
     });
     this.physics.add.overlap(player, bullets, (p, b) => {
-        if (isDashing) executeBulletDeflection(this, b);
+        if (isDashing || isInvulnerable) executeBulletDeflection(this, b);
         else if (!isDrawing) handleFatalImpact(this, b.x, b.y);
     });
     this.physics.add.overlap(player, bossGroup, (p, bSegment) => {
-        if (isDashing) damageBossCore(this, bSegment);
+        if (isDashing || isInvulnerable) damageBossCore(this, bSegment);
         else if (!isDrawing) handleFatalImpact(this, bSegment.x, bSegment.y);
     });
-    
-    // THE PUZZLE ELEMENT: Lasers
-    this.physics.add.overlap(player, laserWalls, (p, laser) => {
+    this.physics.add.overlap(player, laserWalls, () => {
         handleFatalImpact(this, player.x, player.y);
     });
 }
@@ -187,15 +170,14 @@ function update(time, delta) {
 
     bgGrid.y += 1; if (bgGrid.y > 700) bgGrid.y = 350;
 
-    // Rotate dynamic lasers
-    laserWalls.getChildren().forEach(l => {
-        if(l.rotSpeed) l.angle += l.rotSpeed;
-    });
+    laserWalls.getChildren().forEach(l => { if(l.rotSpeed) l.angle += l.rotSpeed; });
 
     if (!isDrawing && !isDashing) {
         enemies.getChildren().forEach(e => {
             this.physics.moveToObject(e, player, e.speedData);
-            e.rotation = Phaser.Math.Angle.Between(e.x, e.y, player.x, player.y);
+            if(useSprites) e.flipX = e.body.velocity.x < 0;
+            else e.rotation = Phaser.Math.Angle.Between(e.x, e.y, player.x, player.y);
+
             if (e.eType === 'SHOOTER' && time > e.nextFire) {
                 e.nextFire = time + 1800;
                 fireLaserProjectile(this, e.x, e.y, player.x, player.y, 200);
@@ -213,8 +195,9 @@ function update(time, delta) {
             }
         });
 
+        // BUG FIX: Aggressive Garbage Collection to prevent Lag
         bullets.getChildren().forEach(b => {
-            if (b.x < -20 || b.x > 420 || b.y < -20 || b.y > 720) b.destroy();
+            if (b.x < -50 || b.x > 450 || b.y < -50 || b.y > 750) b.destroy();
         });
     } else {
         enemies.getChildren().forEach(e => e.body.setVelocity(0, 0));
@@ -223,7 +206,7 @@ function update(time, delta) {
     }
 }
 
-// --- ASSET GEN ---
+// --- FALLBACK GRAPHICS GENERATOR ---
 function generateStudioAssets(scene) {
     let g = scene.make.graphics({x:0, y:0, add:false});
     g.fillStyle(0x222233); g.fillCircle(16, 16, 16); g.fillStyle(0xffffff); g.fillRoundedRect(8, 10, 20, 8, 4); g.generateTexture('tex_player', 32, 32); g.clear();
@@ -234,27 +217,27 @@ function generateStudioAssets(scene) {
     g.fillStyle(0xffffff); g.fillRect(0, 0, 8, 8); g.generateTexture('tex_particle', 8, 8);
 }
 
-// --- FLASH STEP ---
+// --- BUG FIX: INSTANT FLASH STEP WITH SAFETY TIMERS ---
 function executeInstantFlashStep(scene) {
-    isDashing = true; combo = 0;
+    isDashing = true; 
+    isInvulnerable = true; // Protect player during calculation
+    combo = 0;
     enemiesAtStartOfDash = enemies.countActive() + bossGroup.countActive();
     pathGraphics.clear();
     
-    playSound('slash'); // AUDIO TRIGGER
+    if(useSprites) player.play('n_attack', true);
 
     trailGraphics.clear();
-    // VISUAL FEEDBACK: Upgrade Radius makes the actual slash massive
-    let thickness = 10 + (upgRadius * 6);
+    let thickness = 16 + (upgRadius * 5);
     trailGraphics.lineStyle(thickness, currentWeaponColor, 1);
-    trailGraphics.beginPath();
-    trailGraphics.moveTo(currentPath[0].x, currentPath[0].y);
+    trailGraphics.beginPath(); trailGraphics.moveTo(currentPath[0].x, currentPath[0].y);
     currentPath.forEach(pt => trailGraphics.lineTo(pt.x, pt.y));
     trailGraphics.strokePath();
 
     currentPath.forEach(pt => {
         player.setPosition(pt.x, pt.y);
-        scene.physics.overlap(player, laserWalls); // Dies if dashes through laser
-        if(isGameOver) return; // Stop checking if hit laser
+        if(isGameOver) return; 
+        scene.physics.overlap(player, laserWalls);
         scene.physics.overlap(player, enemies);
         scene.physics.overlap(player, bullets);
         scene.physics.overlap(player, bossGroup);
@@ -262,16 +245,23 @@ function executeInstantFlashStep(scene) {
 
     currentPath = [];
 
+    // The Fix: Dashing is false, but Invulnerable stays true for an extra 100ms
     scene.time.delayedCall(50, () => { isDashing = false; });
+    scene.time.delayedCall(150, () => { 
+        isInvulnerable = false; 
+        if(!isGameOver && useSprites) player.play('n_idle', true);
+    });
 
     scene.tweens.add({ targets: trailGraphics, alpha: 0, duration: 150, onComplete: () => { trailGraphics.clear(); trailGraphics.setAlpha(1); } });
 }
 
 function sliceEnemyEntity(scene, enemy) {
+    if(!enemy.active) return; // Prevent double-kills
+    
     if (enemy.eType === 'SHIELD' && !enemy.isBroken) {
-        enemy.isBroken = true; enemy.setTint(0xffffff);
+        enemy.isBroken = true; 
+        if(useSprites) enemy.clearTint(); else enemy.setTint(0xffffff);
         spawnFloatingText(scene, enemy.x, enemy.y, 'SHIELD BREAK', '#ffffff');
-        playSound('hit');
         return;
     }
 
@@ -279,9 +269,7 @@ function sliceEnemyEntity(scene, enemy) {
     let points = Math.floor((100 * combo) * (1 + (upgCombo * 0.2)));
     score += points; uiScore.setText(score);
     
-    playSound('hit'); // AUDIO TRIGGER
-
-    scene.physics.world.pause(); setTimeout(() => { scene.physics.world.resume(); }, 40);
+    scene.physics.world.pause(); setTimeout(() => { scene.physics.world.resume(); }, 30);
 
     particles.setParticleTint(0xffffff); particles.emitParticleAt(enemy.x, enemy.y, 30);
     scene.cameras.main.shake(60, 0.02);
@@ -294,12 +282,12 @@ function sliceEnemyEntity(scene, enemy) {
 }
 
 function damageBossCore(scene, segment) {
+    if(!segment.active) return;
     segment.hp -= 1;
     scene.cameras.main.shake(80, 0.03);
     particles.setParticleTint(0xffffff); particles.emitParticleAt(segment.x, segment.y, 20);
-    playSound('hit');
 
-    scene.physics.world.pause(); setTimeout(() => { scene.physics.world.resume(); }, 50);
+    scene.physics.world.pause(); setTimeout(() => { scene.physics.world.resume(); }, 40);
 
     if (segment.hp <= 0) {
         combo += 5; score += 5000; uiScore.setText(score);
@@ -314,49 +302,32 @@ function damageBossCore(scene, segment) {
 function executeBulletDeflection(scene, bullet) {
     bullet.destroy(); score += 50; uiScore.setText(score);
     particles.setParticleTint(C_BULLET); particles.emitParticleAt(bullet.x, bullet.y, 10);
-    playSound('deflect'); // AUDIO TRIGGER
     if (upgDeflect > 0 && Phaser.Math.Between(1, 100) <= (upgDeflect * 15)) spawnShardBankPayout(scene, bullet.x, bullet.y, 1);
 }
 
-// --- LEVELS & OBSTACLES ---
 function startHandcraftedLevel(scene) {
     uiLevel.setText(`STAGE ${currentLevel}`);
-    uiRank.setText('RANK: ' + getRank());
     enemies.clear(true, true); bullets.clear(true, true); bossGroup.clear(true, true); laserWalls.clear(true, true);
 
     if (currentLevel === 1) {
-        uiObjective.setText('OBJECTIVE: ELIMINATE GRUNTS');
         spawnTarget(scene, 100, 200, 'GRUNT', 40); spawnTarget(scene, 300, 200, 'GRUNT', 40);
         spawnTarget(scene, 200, 350, 'GRUNT', 40);
-    } 
-    else if (currentLevel === 2) {
-        uiObjective.setText('OBJECTIVE: CATCH RUNNERS');
+    } else if (currentLevel === 2) {
         spawnTarget(scene, 100, 200, 'GRUNT', 50); spawnTarget(scene, 300, 200, 'GRUNT', 50);
         spawnTarget(scene, 200, 150, 'RUNNER', 90);
-    } 
-    else if (currentLevel === 3) {
-        uiObjective.setText('OBJECTIVE: AVOID LASER WALL');
-        spawnStaticLaser(scene, 200, 250, 300, 8); // PUZZLE OBSTACLE
+    } else if (currentLevel === 3) {
+        spawnStaticLaser(scene, 200, 250, 300, 8); 
         spawnTarget(scene, 100, 150, 'GRUNT', 40); spawnTarget(scene, 300, 150, 'GRUNT', 40);
         spawnTarget(scene, 200, 350, 'RUNNER', 100);
-    } 
-    else if (currentLevel === 4) {
-        uiObjective.setText('OBJECTIVE: DEFLECT BULLETS');
+    } else if (currentLevel === 4) {
         spawnTarget(scene, 100, 150, 'SHOOTER', 30); spawnTarget(scene, 300, 150, 'SHOOTER', 30);
-    } 
-    else if (currentLevel === 5) {
-        uiObjective.setText('OBJECTIVE: DESTROY CORE');
-        let b = scene.add.sprite(200, 200, 'tex_boss'); scene.physics.add.existing(b);
-        b.body.setCircle(40, 8, 8); b.hp = 8; b.nextFire = scene.time.now + 1000; bossGroup.add(b);
-    } 
-    else if (currentLevel === 6) {
-        uiObjective.setText('OBJECTIVE: ROTATING DANGER');
-        spawnRotatingLaser(scene, 200, 300, 250, 8, 1); // ROTATING PUZZLE
-        spawnTarget(scene, 50, 150, 'SHOOTER', 30); spawnTarget(scene, 350, 150, 'SHOOTER', 30);
-    }
-    else {
-        uiObjective.setText('OBJECTIVE: SURVIVE');
-        // Randomly spawn obstacles
+    } else if (currentLevel === 5) {
+        let b = scene.add.sprite(200, 200, useSprites ? 'enemies_sheet' : 'tex_boss');
+        if(useSprites) { b.setScale(1.2); b.setFrame(18); }
+        scene.physics.add.existing(b);
+        b.body.setCircle(35, 10, 10); b.hp = 8; b.nextFire = scene.time.now + 1000; bossGroup.add(b);
+        spawnFloatingText(scene, 200, 110, '!!! CORE SENTINEL !!!', '#ff0055');
+    } else {
         if(Phaser.Math.Between(0,100) > 50) spawnRotatingLaser(scene, 200, 350, 200, 8, 1.5);
         else spawnStaticLaser(scene, 200, Phaser.Math.Between(200, 400), 250, 8);
 
@@ -372,12 +343,25 @@ function startHandcraftedLevel(scene) {
 }
 
 function spawnTarget(scene, x, y, type, speed) {
-    let e = scene.add.sprite(x, y, type==='GRUNT'?'tex_grunt':type==='RUNNER'?'tex_runner':'tex_shooter');
-    scene.physics.add.existing(e); e.body.setCircle(14, 2, 2);
-    if(type === 'SHIELD') { e.setTexture('tex_grunt'); e.setTint(0x00ffff); e.isBroken = false; }
+    let e;
+    if(useSprites) {
+        e = scene.add.sprite(x, y, 'enemies_sheet').setScale(0.45);
+        if(type === 'GRUNT') e.play('e_grunt');
+        if(type === 'RUNNER') e.play('e_runner');
+        if(type === 'SHOOTER') e.play('e_shooter');
+        if(type === 'SHIELD') { e.play('e_grunt'); e.setTint(0x4444ff); }
+    } else {
+        e = scene.add.sprite(x, y, type==='GRUNT'?'tex_grunt':type==='RUNNER'?'tex_runner':'tex_shooter');
+        if(type === 'SHIELD') { e.setTexture('tex_grunt'); e.setTint(0x00ffff); }
+    }
+    
+    scene.physics.add.existing(e); e.body.setCircle(16, 5, 5);
+    if(type === 'SHIELD') e.isBroken = false;
     if(type === 'SHOOTER') e.nextFire = scene.time.now + 1000;
+    
     e.eType = type; e.speedData = speed; enemies.add(e);
 }
+
 function fireLaserProjectile(scene, sx, sy, tx, ty, speed) {
     let b = scene.add.rectangle(sx, sy, 8, 8, C_BULLET); scene.physics.add.existing(b); scene.physics.moveTo(b, tx, ty, speed); bullets.add(b);
 }
@@ -397,12 +381,10 @@ function evaluateLevelCompletion(scene) {
             spawnFloatingText(scene, 200, 320, 'PERFECT ONE SLASH\n+1500', '#00ffff');
         }
         currentLevel++;
-        playSound('level'); // AUDIO TRIGGER
         scene.time.delayedCall(800, () => startHandcraftedLevel(scene));
     }
 }
 
-// --- META & UI ---
 function spawnShardBankPayout(scene, x, y, count) {
     for (let i = 0; i < count; i++) {
         let s = scene.add.rectangle(x, y, 6, 6, C_SHARD);
@@ -413,6 +395,7 @@ function spawnShardBankPayout(scene, x, y, count) {
         }});
     }
 }
+
 function triggerFloatingComboPhrase(scene, x, y, points) {
     let phrase = `+${points}`;
     if (combo >= 12) phrase = `LEGENDARY!\n+${points}`; else if (combo >= 8) phrase = `AWESOME!\n+${points}`; else if (combo >= 4) phrase = `GREAT!\n+${points}`;
@@ -425,8 +408,8 @@ function spawnFloatingText(scene, x, y, msg, color) {
 }
 
 function handleFatalImpact(scene, x, y) {
+    if(isInvulnerable) return; // Ignore if player just dashed
     isGameOver = true; player.setVisible(false);
-    playSound('crash'); // AUDIO TRIGGER
     particles.setParticleTint(currentWeaponColor); particles.emitParticleAt(player.x, player.y, 40);
     scene.cameras.main.shake(250, 0.05);
 
@@ -468,8 +451,10 @@ function buildMetaUpgradeTerminal(scene) {
     let adTxt = scene.add.text(0, 130, '🎬 WATCH AD: FREE REVIVE', { font: 'bold 12px Courier', fill: '#ff5500' }).setOrigin(0.5);
     adBtn.on('pointerdown', () => {
         if (hasRevived) return;
-        hasRevived = true; isGameOver = false;
+        hasRevived = true; isGameOver = false; isInvulnerable = true;
         player.setPosition(200, 600).setVisible(true);
+        if(useSprites) player.play('n_idle', true);
+        scene.time.delayedCall(1000, () => { isInvulnerable = false; }); // Safe revive
         gameOverContainer.setVisible(false); spawnFloatingText(scene, 200, 350, 'SYSTEM RESTORED', '#00ffff');
     });
     gameOverContainer.add([adBtn, adTxt]); gameOverContainer.adBtn = adBtn; gameOverContainer.adTxt = adTxt;
@@ -478,8 +463,11 @@ function buildMetaUpgradeTerminal(scene) {
     let retryTxt = scene.add.text(0, 210, '> REBOOT CORE <', { font: 'bold 18px Courier', fill: '#00ffff' }).setOrigin(0.5);
     scene.tweens.add({ targets: [retryBtn, retryTxt], alpha: { from: 1, to: 0.7 }, scale: { from: 1, to: 1.05 }, yoyo: true, repeat: -1, duration: 800, ease: 'Sine.easeInOut' });
     retryBtn.on('pointerdown', () => {
-        isGameOver = false; score = 0; currentLevel = 1; hasRevived = false; uiScore.setText('0');
+        isGameOver = false; score = 0; currentLevel = 1; hasRevived = false; isInvulnerable = true;
+        uiScore.setText('0');
         player.setPosition(200, 600).setVisible(true);
+        if(useSprites) player.play('n_idle', true);
+        scene.time.delayedCall(1000, () => { isInvulnerable = false; });
         gameOverContainer.setVisible(false); startHandcraftedLevel(scene);
     });
     gameOverContainer.add([retryBtn, retryTxt]);
