@@ -55,39 +55,47 @@ let upgDeflect = parseInt(localStorage.getItem('upg_deflect')) || 0;
 let totalShards = parseInt(localStorage.getItem('ninja_shards')) || 0;
 
 let player, enemies, bullets, bossGroup, laserWalls;
-let particles, pathGraphics, trailGraphics, bgGrid;
+let particles, pathGraphics, trailGraphics, bgGrid, customBg;
 let score = 0, currentLevel = 1, combo = 0, enemiesAtStartOfDash = 0;
 let isDrawing = false, isDashing = false, isInvulnerable = false, isGameOver = false, hasRevived = false;
 let currentPath = [];
 let currentWeaponColor = 0x00ffff;
 let useSprites = false;
+let useBg = false;
 
 let uiScore, uiShards, uiLevel, gameOverContainer;
 const C_BULLET = 0xff3300, C_SHARD = 0x00ff88;
 
 // --- ROBUST ASSET FETCHING ---
 function preload() {
-    // Load as basic images to prevent grid-slicing math errors
     this.load.image('ninja_raw', 'ninja.png');
     this.load.image('enemies_raw', 'enemies.png');
+    this.load.image('bg_raw', 'bg.png'); // Try to load custom background
 
     this.load.on('loaderror', (fileObj) => {
-        console.warn('GitHub / CORS Blocked: ' + fileObj.key);
-        useSprites = false;
+        if(fileObj.key === 'ninja_raw' || fileObj.key === 'enemies_raw') {
+            useSprites = false;
+        }
+        if(fileObj.key === 'bg_raw') {
+            useBg = false;
+        }
     });
 
     this.load.on('complete', () => {
-        if (this.textures.exists('ninja_raw') && this.textures.exists('enemies_raw')) {
-            useSprites = true;
-        }
+        if (this.textures.exists('ninja_raw') && this.textures.exists('enemies_raw')) useSprites = true;
+        if (this.textures.exists('bg_raw')) useBg = true;
     });
 }
 
 function create() {
-    // Generate fallback graphics immediately just in case
     generateStudioAssets(this);
 
-    bgGrid = this.add.grid(200, 350, 400, 1400, 40, 40, 0x010103, 1, 0x050518, 1);
+    // BACKGROUND LOGIC
+    if (useBg) {
+        customBg = this.add.tileSprite(200, 350, 400, 700, 'bg_raw');
+    } else {
+        bgGrid = this.add.grid(200, 350, 400, 1400, 40, 40, 0x010103, 1, 0x050518, 1);
+    }
 
     particles = this.add.particles(0, 0, 'tex_particle', {
         speed: { min: 200, max: 600 }, angle: { min: 0, max: 360 },
@@ -98,25 +106,22 @@ function create() {
     enemies = this.physics.add.group(); bullets = this.physics.add.group();
     bossGroup = this.physics.add.group(); laserWalls = this.physics.add.group();
 
-    // Setup Player
+    // SETUP PLAYER (Increased Scale)
     player = this.add.sprite(200, 550, useSprites ? 'ninja_raw' : 'tex_player');
     if (useSprites) {
-        player.setCrop(0, 0, player.width/4, player.height); // Crop to just the first pose
-        player.displayHeight = 60; player.scaleX = player.scaleY; 
+        player.setCrop(0, 0, player.width/4, player.height); 
+        player.displayHeight = 80; // SCALED UP
+        player.scaleX = player.scaleY; 
     }
     this.physics.add.existing(player);
     player.body.setCircle(15, 15, 15);
 
-    // UI Setup
+    // UI
     uiScore = this.add.text(20, 20, '0', { font: 'bold 36px Courier', fill: '#ffffff' }).setDepth(10);
     uiScore.setShadow(0, 0, '#00ffff', 10, false, true);
     uiShards = this.add.text(380, 25, '◆' + totalShards, { font: 'bold 20px Courier', fill: '#00ff88' }).setOrigin(1, 0).setDepth(10);
     uiLevel = this.add.text(200, 25, 'STAGE 1', { font: 'bold 16px Courier', fill: '#888899' }).setOrigin(0.5).setDepth(10);
     
-    if(!useSprites) {
-        this.add.text(200, 50, 'IMAGES NOT FOUND\nCheck Github Cache (CTRL+F5)', { font: '10px Courier', fill: '#ff0000', align: 'center' }).setOrigin(0.5).setDepth(10);
-    }
-
     buildMetaUpgradeTerminal(this);
     startHandcraftedLevel(this);
 
@@ -129,7 +134,6 @@ function create() {
         currentPath = [{ x: player.x, y: player.y }];
         pathGraphics.clear(); pathGraphics.lineStyle(3, currentWeaponColor, 0.9);
         
-        // Pose 2: Running
         if(useSprites) player.setCrop(player.width/4, 0, player.width/4, player.height);
         else player.setScale(1.2); 
     });
@@ -153,7 +157,7 @@ function create() {
         if (currentPath.length > 2) executeInstantFlashStep(this);
         else { 
             pathGraphics.clear(); currentPath = []; 
-            if(useSprites) player.setCrop(0, 0, player.width/4, player.height); // Back to idle
+            if(useSprites) player.setCrop(0, 0, player.width/4, player.height); 
             else player.setScale(1);
         }
     });
@@ -175,13 +179,16 @@ function create() {
 
 function update(time, delta) {
     if (isGameOver) return;
-    bgGrid.y += 1; if (bgGrid.y > 700) bgGrid.y = 350;
+    
+    if (useBg) customBg.tilePositionY -= 1;
+    else { bgGrid.y += 1; if (bgGrid.y > 700) bgGrid.y = 350; }
+    
     laserWalls.getChildren().forEach(l => { if(l.rotSpeed) l.angle += l.rotSpeed; });
 
     if (!isDrawing && !isDashing) {
         enemies.getChildren().forEach(e => {
             this.physics.moveToObject(e, player, e.speedData);
-            e.flipX = e.body.velocity.x > 0;
+            if(useSprites) e.flipX = e.body.velocity.x > 0;
             
             if (e.eType === 'SHOOTER' && time > e.nextFire) {
                 e.nextFire = time + 1800;
@@ -206,7 +213,6 @@ function update(time, delta) {
     }
 }
 
-// --- GENERATE CLEAN VECTOR GRAPHICS FALLBACK ---
 function generateStudioAssets(scene) {
     let g = scene.make.graphics({x:0, y:0, add:false});
     g.fillStyle(0x222233); g.fillCircle(16, 16, 16); g.fillStyle(0xffffff); g.fillRoundedRect(8, 10, 20, 8, 4); g.generateTexture('tex_player', 32, 32); g.clear();
@@ -217,7 +223,7 @@ function generateStudioAssets(scene) {
     g.fillStyle(0xffffff); g.fillRect(0, 0, 8, 8); g.generateTexture('tex_particle', 8, 8);
 }
 
-// --- FREEZE-PROOF MATH ENGINE ---
+// --- FREEZE-PROOF MATH ENGINE WITH FLIPPING ---
 function executeInstantFlashStep(scene) {
     isDashing = true; 
     isInvulnerable = true; 
@@ -225,11 +231,10 @@ function executeInstantFlashStep(scene) {
     enemiesAtStartOfDash = enemies.countActive() + bossGroup.countActive();
     playSound('slash');
     
-    // Pose 3: Attack
-    if(useSprites) player.setCrop((player.width/4)*2, 0, player.width/4, player.height);
+    // PLAYER MOVEMENT FIX: Use Glitch Frame during teleport
+    if(useSprites) player.setCrop((player.width/4)*3, 0, player.width/4, player.height);
     
     pathGraphics.clear(); trailGraphics.clear();
-    
     let thickness = 16 + (upgRadius * 5);
     trailGraphics.lineStyle(thickness, currentWeaponColor, 1);
     trailGraphics.beginPath(); trailGraphics.moveTo(currentPath[0].x, currentPath[0].y);
@@ -248,25 +253,32 @@ function executeInstantFlashStep(scene) {
         if (isGameOver) break;
 
         enemies.getChildren().forEach(enemy => {
-            if(!enemy.active) return; // Prevent double-check
+            if(!enemy || !enemy.active) return; // THE CRASH FIX: Ignore dead enemies
             let circle = new Phaser.Geom.Circle(enemy.x, enemy.y, hitRadius + 15);
             if (Phaser.Geom.Intersects.LineToCircle(line, circle)) sliceEnemyEntity(scene, enemy);
         });
 
         bullets.getChildren().forEach(bullet => {
-            if(!bullet.active) return;
+            if(!bullet || !bullet.active) return;
             let circle = new Phaser.Geom.Circle(bullet.x, bullet.y, hitRadius + 10);
             if (Phaser.Geom.Intersects.LineToCircle(line, circle)) executeBulletDeflection(scene, bullet);
         });
 
         bossGroup.getChildren().forEach(boss => {
-            if(!boss.active) return;
+            if(!boss || !boss.active) return;
             let circle = new Phaser.Geom.Circle(boss.x, boss.y, hitRadius + 40);
             if (Phaser.Geom.Intersects.LineToCircle(line, circle)) damageBossCore(scene, boss);
         });
     }
 
     let lastPoint = currentPath[currentPath.length - 1];
+    
+    // PLAYER MOVEMENT FIX: Flip the character to face the direction they dashed
+    if (useSprites) {
+        if (lastPoint.x < player.x) player.flipX = true;
+        else if (lastPoint.x > player.x) player.flipX = false;
+    }
+    
     player.setPosition(lastPoint.x, lastPoint.y);
     currentPath = [];
 
@@ -293,14 +305,12 @@ function sliceEnemyEntity(scene, enemy) {
         return;
     }
     
-    enemy.active = false; // BUG FIX: Locks the enemy so math engine can't hit it twice
+    enemy.active = false; 
     combo++;
     let points = Math.floor((100 * combo) * (1 + (upgCombo * 0.2)));
     score += points; uiScore.setText(score);
-    
     playSound('hit');
     
-    // BUG FIX: Removed physics.pause() to prevent engine freeze. Used camera flash instead.
     scene.cameras.main.flash(50, 255, 255, 255, 0.2); 
     scene.cameras.main.shake(60, 0.02);
     particles.setParticleTint(0xffffff); particles.emitParticleAt(enemy.x, enemy.y, 30);
@@ -322,7 +332,7 @@ function damageBossCore(scene, segment) {
     playSound('hit');
 
     if (segment.hp <= 0) {
-        segment.active = false; // BUG FIX
+        segment.active = false; 
         combo += 5; score += 5000; uiScore.setText(score);
         spawnFloatingText(scene, segment.x, segment.y, 'CORE DESTROYED', '#ffff00');
         spawnShardBankPayout(scene, segment.x, segment.y, 15);
@@ -334,7 +344,7 @@ function damageBossCore(scene, segment) {
 
 function executeBulletDeflection(scene, bullet) {
     if(!bullet.active) return;
-    bullet.active = false; // BUG FIX
+    bullet.active = false;
     bullet.destroy(); score += 50; uiScore.setText(score);
     particles.setParticleTint(C_BULLET); particles.emitParticleAt(bullet.x, bullet.y, 10);
     playSound('deflect');
@@ -357,8 +367,8 @@ function startHandcraftedLevel(scene) {
     } else if (currentLevel === 5) {
         let b = scene.add.sprite(200, 200, useSprites ? 'enemies_raw' : 'tex_boss');
         if(useSprites) {
-            b.setCrop((b.width/3)*2, 0, b.width/3, b.height); // Eye Turret
-            b.displayHeight = 80; b.scaleX = b.scaleY;
+            b.setCrop((b.width/3)*2, 0, b.width/3, b.height); 
+            b.displayHeight = 100; b.scaleX = b.scaleY;
         }
         scene.physics.add.existing(b);
         b.body.setCircle(35, 10, 10); b.hp = 8; b.nextFire = scene.time.now + 1000; bossGroup.add(b);
@@ -380,10 +390,11 @@ function startHandcraftedLevel(scene) {
 function spawnTarget(scene, x, y, type, speed) {
     let e = scene.add.sprite(x, y, useSprites ? 'enemies_raw' : (type==='GRUNT'?'tex_grunt':type==='RUNNER'?'tex_runner':'tex_shooter'));
     if(useSprites) {
-        if(type === 'GRUNT' || type === 'SHIELD') e.setCrop(0, 0, e.width/3, e.height); // Drone
-        if(type === 'RUNNER') e.setCrop(e.width/3, 0, e.width/3, e.height); // Dog
-        if(type === 'SHOOTER') e.setCrop((e.width/3)*2, 0, e.width/3, e.height); // Eye
-        e.displayHeight = 45; e.scaleX = e.scaleY; 
+        if(type === 'GRUNT' || type === 'SHIELD') e.setCrop(0, 0, e.width/3, e.height);
+        if(type === 'RUNNER') e.setCrop(e.width/3, 0, e.width/3, e.height);
+        if(type === 'SHOOTER') e.setCrop((e.width/3)*2, 0, e.width/3, e.height);
+        e.displayHeight = 65; // SCALED UP
+        e.scaleX = e.scaleY; 
     }
     
     scene.physics.add.existing(e); 
@@ -442,7 +453,7 @@ function handleFatalImpact(scene, x, y) {
     if(isGameOver || isInvulnerable) return;
     isGameOver = true; player.setVisible(false);
     playSound('crash');
-    particles.setParticleTint(currentWeaponColor); particles.emitParticleAt(player.x, player.y, 40);
+    particles.setParticleTint(0xffffff); particles.emitParticleAt(player.x, player.y, 40);
     scene.cameras.main.shake(250, 0.05);
 
     updateTerminalDisplayLayout();
