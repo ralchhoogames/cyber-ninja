@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Cyber Ninja: Zero Freeze</title>
+    <title>Cyber Ninja: Infinite Survivor</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
         body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #010103; font-family: monospace; user-select: none; }
@@ -13,32 +13,17 @@
 <body>
 
 <script>
-// --- WEB AUDIO API ---
+// --- AUDIO SYSTEM ---
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 function playSound(type) {
     if(audioCtx.state === 'suspended') audioCtx.resume();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-    
-    if(type === 'slash') {
-        osc.type = 'triangle'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
-        gain.gain.setValueAtTime(0.5, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-        osc.start(now); osc.stop(now + 0.1);
-    } else if (type === 'hit') {
-        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
-        gain.gain.setValueAtTime(0.4, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-        osc.start(now); osc.stop(now + 0.15);
-    } else if (type === 'deflect') {
-        osc.type = 'sine'; osc.frequency.setValueAtTime(1200, now);
-        gain.gain.setValueAtTime(0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-        osc.start(now); osc.stop(now + 0.1);
-    } else if (type === 'crash') {
-        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, now); osc.frequency.linearRampToValueAtTime(10, now + 0.5);
-        gain.gain.setValueAtTime(0.6, now); gain.gain.linearRampToValueAtTime(0, now + 0.5);
-        osc.start(now); osc.stop(now + 0.5);
-    }
+    const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination); const now = audioCtx.currentTime;
+    if(type === 'slash') { osc.type = 'triangle'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(100, now + 0.1); gain.gain.setValueAtTime(0.5, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
+    else if (type === 'hit') { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); osc.frequency.exponentialRampToValueAtTime(40, now + 0.15); gain.gain.setValueAtTime(0.4, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); }
+    else if (type === 'item') { osc.type = 'sine'; osc.frequency.setValueAtTime(1200, now); gain.gain.setValueAtTime(0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
+    else if (type === 'levelup') { osc.type = 'square'; osc.frequency.setValueAtTime(400, now); osc.frequency.setValueAtTime(600, now+0.1); osc.frequency.setValueAtTime(800, now+0.2); gain.gain.setValueAtTime(0.3, now); gain.gain.linearRampToValueAtTime(0, now + 0.5); osc.start(now); osc.stop(now + 0.5); }
+    else if (type === 'crash') { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, now); osc.frequency.linearRampToValueAtTime(10, now + 0.5); gain.gain.setValueAtTime(0.6, now); gain.gain.linearRampToValueAtTime(0, now + 0.5); osc.start(now); osc.stop(now + 0.5); }
 }
 
 const config = {
@@ -49,93 +34,103 @@ const config = {
 
 const game = new Phaser.Game(config);
 
-let upgRadius = parseInt(localStorage.getItem('upg_radius')) || 1; 
-let upgCombo = parseInt(localStorage.getItem('upg_combo')) || 1;
-let upgDeflect = parseInt(localStorage.getItem('upg_deflect')) || 0;
-let totalShards = parseInt(localStorage.getItem('ninja_shards')) || 0;
+// --- GLOBAL STATE ---
+let STATE = 'PLAYING'; 
+let totalGems = parseInt(localStorage.getItem('ninja_gems')) || 0;
 
-let player, enemies, bullets, bossGroup, laserWalls;
-let particles, pathGraphics, trailGraphics, bgGrid, customBg;
-let score = 0, currentLevel = 1, combo = 0, enemiesAtStartOfDash = 0;
-let isDrawing = false, isDashing = false, isInvulnerable = false, isGameOver = false, hasRevived = false;
+// --- IN-RUN STATS ---
+let score = 0;
+let runLevel = 1;
+let currentExp = 0;
+let maxExp = 5;
+let waveTimer = 0;
+let waveDifficulty = 1;
+let isDrawing = false, isDashing = false, isInvulnerable = false;
 let currentPath = [];
-let currentWeaponColor = 0x00ffff;
+let activePowerups = { magnet: 0, shield: false };
+
+// Upgrades
+let statRadius = 1;
+let statCombo = 1;
+
+let player, enemies, bullets, bosses, items;
+let pathGraphics, trailGraphics, customBg;
+let uiScore, uiGems, uiExpBar, uiExpFill, btnPause;
+let pauseMenu, levelUpMenu, gameOverMenu;
+
 let useSprites = false;
 let useBg = false;
 
-let uiScore, uiShards, uiLevel, gameOverContainer;
-const C_BULLET = 0xff3300, C_SHARD = 0x00ff88;
-
-// --- ROBUST ASSET FETCHING ---
 function preload() {
-    this.load.image('ninja_raw', 'ninja.png');
-    this.load.image('enemies_raw', 'enemies.png');
-    this.load.image('bg_raw', 'bg.png'); // Try to load custom background
+    // MODIFIED: Updated to ninja2.png and bg2.png
+    this.load.image('ninja', 'ninja2.png');
+    this.load.image('tier1', 'tier1.png');
+    this.load.image('tier2', 'tier2.png');
+    this.load.image('bosses', 'bosses.png');
+    this.load.image('items', 'items.png');
+    this.load.image('bg', 'bg2.png');
 
     this.load.on('loaderror', (fileObj) => {
-        if(fileObj.key === 'ninja_raw' || fileObj.key === 'enemies_raw') {
-            useSprites = false;
-        }
-        if(fileObj.key === 'bg_raw') {
-            useBg = false;
-        }
+        if(fileObj.key === 'bg') useBg = false;
+        else useSprites = false;
     });
 
     this.load.on('complete', () => {
-        if (this.textures.exists('ninja_raw') && this.textures.exists('enemies_raw')) useSprites = true;
-        if (this.textures.exists('bg_raw')) useBg = true;
+        if (this.textures.exists('ninja') && this.textures.exists('tier1')) useSprites = true;
+        if (this.textures.exists('bg')) useBg = true;
     });
 }
 
 function create() {
-    generateStudioAssets(this);
-
-    // BACKGROUND LOGIC
-    if (useBg) {
-        customBg = this.add.tileSprite(200, 350, 400, 700, 'bg_raw');
+    // 1. ENVIRONMENT
+    if(useBg) {
+        customBg = this.add.tileSprite(200, 350, 400, 700, 'bg');
     } else {
-        bgGrid = this.add.grid(200, 350, 400, 1400, 40, 40, 0x010103, 1, 0x050518, 1);
+        customBg = this.add.grid(200, 350, 400, 1400, 40, 40, 0x010103, 1, 0x050518, 1);
     }
 
-    particles = this.add.particles(0, 0, 'tex_particle', {
-        speed: { min: 200, max: 600 }, angle: { min: 0, max: 360 },
-        scale: { start: 0.8, end: 0 }, blendMode: 'ADD', lifespan: 400, emitting: false
-    });
+    pathGraphics = this.add.graphics().setDepth(5); 
+    trailGraphics = this.add.graphics().setDepth(5);
+    
+    enemies = this.physics.add.group(); 
+    bullets = this.physics.add.group();
+    bosses = this.physics.add.group(); 
+    items = this.physics.add.group();
 
-    pathGraphics = this.add.graphics(); trailGraphics = this.add.graphics();
-    enemies = this.physics.add.group(); bullets = this.physics.add.group();
-    bossGroup = this.physics.add.group(); laserWalls = this.physics.add.group();
-
-    // SETUP PLAYER (Increased Scale)
-    player = this.add.sprite(200, 550, useSprites ? 'ninja_raw' : 'tex_player');
-    if (useSprites) {
-        player.setCrop(0, 0, player.width/4, player.height); 
-        player.displayHeight = 80; // SCALED UP
-        player.scaleX = player.scaleY; 
+    // 2. PLAYER
+    player = this.add.sprite(200, 550, useSprites ? 'ninja' : '');
+    if(useSprites) {
+        player.setCrop(0, 0, player.width/3, player.height); 
+        // MODIFIED: Scaled up to 110
+        player.displayHeight = 110; player.scaleX = player.scaleY;
+    } else {
+        player = this.add.rectangle(200, 550, 30, 30, 0x00ffff);
     }
     this.physics.add.existing(player);
-    player.body.setCircle(15, 15, 15);
+    player.body.setCircle(18); // Scaled hitbox
+    player.setDepth(10);
 
-    // UI
-    uiScore = this.add.text(20, 20, '0', { font: 'bold 36px Courier', fill: '#ffffff' }).setDepth(10);
-    uiScore.setShadow(0, 0, '#00ffff', 10, false, true);
-    uiShards = this.add.text(380, 25, '◆' + totalShards, { font: 'bold 20px Courier', fill: '#00ff88' }).setOrigin(1, 0).setDepth(10);
-    uiLevel = this.add.text(200, 25, 'STAGE 1', { font: 'bold 16px Courier', fill: '#888899' }).setOrigin(0.5).setDepth(10);
+    // 3. UI
+    uiScore = this.add.text(10, 10, 'SCORE: 0', { font: 'bold 20px Courier', fill: '#fff' }).setDepth(20);
+    uiGems = this.add.text(10, 35, '💎 ' + totalGems, { font: 'bold 20px Courier', fill: '#ff00aa' }).setDepth(20);
     
-    buildMetaUpgradeTerminal(this);
-    startHandcraftedLevel(this);
+    uiExpBar = this.add.rectangle(200, 680, 380, 15, 0x222233).setDepth(20);
+    uiExpFill = this.add.rectangle(10, 680, 0, 15, 0x0088ff).setOrigin(0, 0.5).setDepth(21);
 
-    // INPUTS
+    btnPause = this.add.text(380, 15, '⏸', { font: '24px Arial', fill: '#fff' }).setOrigin(1, 0).setInteractive().setDepth(20);
+    btnPause.on('pointerdown', () => { if(STATE === 'PLAYING') triggerPause(this); });
+
+    buildMenus(this);
+
+    // 4. INPUTS
     this.input.on('pointerdown', () => {
-        if (isGameOver || isDashing) return;
+        if (STATE !== 'PLAYING' || isDashing) return;
         if(audioCtx.state === 'suspended') audioCtx.resume();
         
         isDrawing = true;
         currentPath = [{ x: player.x, y: player.y }];
-        pathGraphics.clear(); pathGraphics.lineStyle(3, currentWeaponColor, 0.9);
-        
-        if(useSprites) player.setCrop(player.width/4, 0, player.width/4, player.height);
-        else player.setScale(1.2); 
+        pathGraphics.clear(); pathGraphics.lineStyle(4, 0x00ffff, 0.9);
+        if(useSprites) player.setCrop(player.width/3, 0, player.width/3, player.height); 
     });
 
     this.input.on('pointermove', (pointer) => {
@@ -143,7 +138,7 @@ function create() {
         let lastPt = currentPath[currentPath.length - 1];
         if (Phaser.Math.Distance.Between(lastPt.x, lastPt.y, pointer.x, pointer.y) > 15) {
             currentPath.push({ x: pointer.x, y: pointer.y });
-            pathGraphics.clear(); pathGraphics.lineStyle(4, currentWeaponColor, 0.9);
+            pathGraphics.clear(); pathGraphics.lineStyle(4, 0x00ffff, 0.9);
             pathGraphics.beginPath(); pathGraphics.moveTo(currentPath[0].x, currentPath[0].y);
             currentPath.forEach(pt => pathGraphics.lineTo(pt.x, pt.y));
             pathGraphics.strokePath();
@@ -153,37 +148,44 @@ function create() {
     this.input.on('pointerup', () => {
         if (!isDrawing) return;
         isDrawing = false;
-        
-        if (currentPath.length > 2) executeInstantFlashStep(this);
+        if (currentPath.length > 2) executeSlash(this);
         else { 
             pathGraphics.clear(); currentPath = []; 
-            if(useSprites) player.setCrop(0, 0, player.width/4, player.height); 
-            else player.setScale(1);
+            if(useSprites) player.setCrop(0, 0, player.width/3, player.height);
         }
     });
 
-    // FATAL COLLISIONS (Only triggers if NOT dashing/invulnerable)
-    this.physics.add.overlap(player, enemies, (p, enemy) => {
-        if (!isDashing && !isInvulnerable && !isDrawing && enemy.active) handleFatalImpact(this, enemy.x, enemy.y);
-    });
-    this.physics.add.overlap(player, bullets, (p, b) => {
-        if (!isDashing && !isInvulnerable && !isDrawing && b.active) handleFatalImpact(this, b.x, b.y);
-    });
-    this.physics.add.overlap(player, bossGroup, (p, b) => {
-        if (!isDashing && !isInvulnerable && !isDrawing && b.active) handleFatalImpact(this, b.x, b.y);
-    });
-    this.physics.add.overlap(player, laserWalls, () => {
-        if (!isInvulnerable) handleFatalImpact(this, player.x, player.y);
-    });
+    // 5. FATAL COLLISIONS
+    this.physics.add.overlap(player, enemies, (p, e) => { if (STATE === 'PLAYING' && !isDashing && !isInvulnerable && e.active) handleFatalImpact(this); });
+    this.physics.add.overlap(player, bullets, (p, b) => { if (STATE === 'PLAYING' && !isDashing && !isInvulnerable && b.active) handleFatalImpact(this); });
+    this.physics.add.overlap(player, bosses, (p, b) => { if (STATE === 'PLAYING' && !isDashing && !isInvulnerable && b.active) handleFatalImpact(this); });
 }
 
 function update(time, delta) {
-    if (isGameOver) return;
-    
-    if (useBg) customBg.tilePositionY -= 1;
-    else { bgGrid.y += 1; if (bgGrid.y > 700) bgGrid.y = 350; }
-    
-    laserWalls.getChildren().forEach(l => { if(l.rotSpeed) l.angle += l.rotSpeed; });
+    if (STATE !== 'PLAYING') {
+        enemies.getChildren().forEach(e => e.body.setVelocity(0, 0));
+        bullets.getChildren().forEach(b => b.body.setVelocity(0, 0));
+        bosses.getChildren().forEach(b => b.body.setVelocity(0, 0));
+        items.getChildren().forEach(i => i.body.setVelocity(0, 0));
+        return; 
+    }
+
+    if(useBg && customBg.tilePositionY !== undefined) customBg.tilePositionY -= (2 + (waveDifficulty * 0.5));
+    else { customBg.y += 2; if (customBg.y > 700) customBg.y = 350; }
+
+    // AI DIRECTOR 
+    waveTimer += delta;
+    if (waveTimer > 2000 - (waveDifficulty * 40)) {
+        waveTimer = 0;
+        spawnEnemyDirector(this);
+    }
+
+    // Magnet Powerup Logic
+    if (activePowerups.magnet > time) {
+        items.getChildren().forEach(item => { this.physics.moveToObject(item, player, 450); });
+    } else {
+        items.getChildren().forEach(item => { item.body.setVelocity(0, 60); }); 
+    }
 
     if (!isDrawing && !isDashing) {
         enemies.getChildren().forEach(e => {
@@ -191,334 +193,294 @@ function update(time, delta) {
             if(useSprites) e.flipX = e.body.velocity.x > 0;
             
             if (e.eType === 'SHOOTER' && time > e.nextFire) {
-                e.nextFire = time + 1800;
-                fireLaserProjectile(this, e.x, e.y, player.x, player.y, 200);
+                e.nextFire = time + 2000;
+                fireProjectile(this, e.x, e.y, player.x, player.y, 160 + (waveDifficulty*5));
             }
         });
-        bossGroup.getChildren().forEach(b => {
-            if(!useSprites) b.angle += 3;
+
+        bosses.getChildren().forEach(b => {
+            b.x += Math.sin(time/500) * 2; 
             if (time > b.nextFire) {
-                b.nextFire = time + 1200;
+                b.nextFire = time + 1000 - (waveDifficulty*15);
                 for(let angle=0; angle<360; angle+=45) {
                     let rad = Phaser.Math.DegToRad(angle);
-                    fireLaserProjectile(this, b.x, b.y, b.x + Math.cos(rad)*100, b.y + Math.sin(rad)*100, 150);
+                    fireProjectile(this, b.x, b.y, b.x + Math.cos(rad)*100, b.y + Math.sin(rad)*100, 160);
                 }
             }
         });
-        bullets.getChildren().forEach(b => { if (b.x < -50 || b.x > 450 || b.y < -50 || b.y > 750) { b.active = false; b.destroy(); } });
-    } else {
-        enemies.getChildren().forEach(e => e.body.setVelocity(0, 0));
-        bullets.getChildren().forEach(b => b.body.setVelocity(0, 0));
-        bossGroup.getChildren().forEach(b => b.body.setVelocity(0, 0));
+
+        bullets.getChildren().forEach(b => { if (b.y > 750 || b.x < -50 || b.x > 450) { b.active=false; b.destroy(); } });
+        items.getChildren().forEach(i => { if (i.y > 750) { i.active=false; i.destroy(); } });
     }
 }
 
-function generateStudioAssets(scene) {
-    let g = scene.make.graphics({x:0, y:0, add:false});
-    g.fillStyle(0x222233); g.fillCircle(16, 16, 16); g.fillStyle(0xffffff); g.fillRoundedRect(8, 10, 20, 8, 4); g.generateTexture('tex_player', 32, 32); g.clear();
-    g.fillStyle(0xff0055); g.fillCircle(16, 16, 14); g.fillStyle(0x000000); g.fillCircle(16, 16, 8); g.fillStyle(0xffffff); g.fillCircle(16, 16, 4); g.generateTexture('tex_grunt', 32, 32); g.clear();
-    g.fillStyle(0xffff00); g.fillTriangle(0, 8, 24, 16, 0, 24); g.generateTexture('tex_runner', 24, 32); g.clear();
-    g.fillStyle(0xbd00ff); g.fillRect(4, 4, 24, 24); g.fillStyle(0xffffff); g.fillRect(12, 12, 8, 8); g.generateTexture('tex_shooter', 32, 32); g.clear();
-    g.lineStyle(6, 0xff0055); g.strokeCircle(48, 48, 40); g.fillStyle(0x222233); g.fillCircle(48, 48, 30); g.fillStyle(0xffffff); g.fillCircle(48, 48, 15); g.generateTexture('tex_boss', 96, 96); g.clear();
-    g.fillStyle(0xffffff); g.fillRect(0, 0, 8, 8); g.generateTexture('tex_particle', 8, 8);
-}
-
-// --- FREEZE-PROOF MATH ENGINE WITH FLIPPING ---
-function executeInstantFlashStep(scene) {
-    isDashing = true; 
-    isInvulnerable = true; 
-    combo = 0;
-    enemiesAtStartOfDash = enemies.countActive() + bossGroup.countActive();
-    playSound('slash');
+// --- AI DIRECTOR SPAWN LOGIC ---
+function spawnEnemyDirector(scene) {
+    waveDifficulty = 1 + Math.floor(score / 5000);
     
-    // PLAYER MOVEMENT FIX: Use Glitch Frame during teleport
-    if(useSprites) player.setCrop((player.width/4)*3, 0, player.width/4, player.height);
-    
-    pathGraphics.clear(); trailGraphics.clear();
-    let thickness = 16 + (upgRadius * 5);
-    trailGraphics.lineStyle(thickness, currentWeaponColor, 1);
-    trailGraphics.beginPath(); trailGraphics.moveTo(currentPath[0].x, currentPath[0].y);
-    currentPath.forEach(pt => trailGraphics.lineTo(pt.x, pt.y));
-    trailGraphics.strokePath();
-
-    let hitRadius = 25 + (upgRadius * 5); 
-
-    for (let i = 0; i < currentPath.length - 1; i++) {
-        let line = new Phaser.Geom.Line(currentPath[i].x, currentPath[i].y, currentPath[i+1].x, currentPath[i+1].y);
-
-        laserWalls.getChildren().forEach(laser => {
-            if (Phaser.Geom.Intersects.LineToRectangle(line, laser.getBounds())) handleFatalImpact(scene, player.x, player.y);
-        });
-
-        if (isGameOver) break;
-
-        enemies.getChildren().forEach(enemy => {
-            if(!enemy || !enemy.active) return; // THE CRASH FIX: Ignore dead enemies
-            let circle = new Phaser.Geom.Circle(enemy.x, enemy.y, hitRadius + 15);
-            if (Phaser.Geom.Intersects.LineToCircle(line, circle)) sliceEnemyEntity(scene, enemy);
-        });
-
-        bullets.getChildren().forEach(bullet => {
-            if(!bullet || !bullet.active) return;
-            let circle = new Phaser.Geom.Circle(bullet.x, bullet.y, hitRadius + 10);
-            if (Phaser.Geom.Intersects.LineToCircle(line, circle)) executeBulletDeflection(scene, bullet);
-        });
-
-        bossGroup.getChildren().forEach(boss => {
-            if(!boss || !boss.active) return;
-            let circle = new Phaser.Geom.Circle(boss.x, boss.y, hitRadius + 40);
-            if (Phaser.Geom.Intersects.LineToCircle(line, circle)) damageBossCore(scene, boss);
-        });
-    }
-
-    let lastPoint = currentPath[currentPath.length - 1];
-    
-    // PLAYER MOVEMENT FIX: Flip the character to face the direction they dashed
-    if (useSprites) {
-        if (lastPoint.x < player.x) player.flipX = true;
-        else if (lastPoint.x > player.x) player.flipX = false;
-    }
-    
-    player.setPosition(lastPoint.x, lastPoint.y);
-    currentPath = [];
-
-    // Safety timers
-    scene.time.delayedCall(50, () => { 
-        isDashing = false; 
-        if(!isGameOver) {
-            if(useSprites) player.setCrop(0, 0, player.width/4, player.height); // Back to idle
-            else player.setScale(1);
-        }
-    });
-    scene.time.delayedCall(250, () => { isInvulnerable = false; });
-
-    scene.tweens.add({ targets: trailGraphics, alpha: 0, duration: 150, onComplete: () => { trailGraphics.clear(); trailGraphics.setAlpha(1); } });
-}
-
-function sliceEnemyEntity(scene, enemy) {
-    if(!enemy.active) return;
-    
-    if (enemy.eType === 'SHIELD' && !enemy.isBroken) {
-        enemy.isBroken = true; 
-        if(useSprites) enemy.clearTint(); else enemy.setTint(0xffffff);
-        spawnFloatingText(scene, enemy.x, enemy.y, 'SHIELD BREAK', '#ffffff');
+    if (Math.random() < 0.05 && bosses.countActive() === 0 && waveDifficulty >= 2) {
+        spawnBoss(scene);
         return;
     }
-    
-    enemy.active = false; 
-    combo++;
-    let points = Math.floor((100 * combo) * (1 + (upgCombo * 0.2)));
-    score += points; uiScore.setText(score);
-    playSound('hit');
-    
-    scene.cameras.main.flash(50, 255, 255, 255, 0.2); 
-    scene.cameras.main.shake(60, 0.02);
-    particles.setParticleTint(0xffffff); particles.emitParticleAt(enemy.x, enemy.y, 30);
-    
-    triggerFloatingComboPhrase(scene, enemy.x, enemy.y, points);
-    spawnShardBankPayout(scene, enemy.x, enemy.y, 1);
-    enemy.destroy();
-    evaluateLevelCompletion(scene);
+
+    let x = Phaser.Math.Between(40, 360);
+    let y = Phaser.Math.Between(-50, 50);
+    let r = Math.random();
+
+    if (waveDifficulty > 3 && r < 0.2) spawnActor(scene, x, y, 'SHOOTER', 45);
+    else if (waveDifficulty > 2 && r < 0.4) spawnActor(scene, x, y, 'SHIELD', 55);
+    else if (r < 0.5) spawnActor(scene, x, y, 'RUNNER', 120 + (waveDifficulty*8));
+    else spawnActor(scene, x, y, 'GRUNT', 70 + (waveDifficulty*5));
 }
 
-function damageBossCore(scene, segment) {
-    if(!segment.active || segment.invuln) return;
-    segment.hp -= 1;
-    segment.invuln = true; scene.time.delayedCall(100, () => segment.invuln = false); 
-    
-    scene.cameras.main.flash(50, 255, 0, 85, 0.3);
-    scene.cameras.main.shake(80, 0.03);
-    particles.setParticleTint(0xffffff); particles.emitParticleAt(segment.x, segment.y, 20);
-    playSound('hit');
-
-    if (segment.hp <= 0) {
-        segment.active = false; 
-        combo += 5; score += 5000; uiScore.setText(score);
-        spawnFloatingText(scene, segment.x, segment.y, 'CORE DESTROYED', '#ffff00');
-        spawnShardBankPayout(scene, segment.x, segment.y, 15);
-        segment.destroy(); evaluateLevelCompletion(scene);
-    } else {
-        spawnFloatingText(scene, segment.x, segment.y, `ARMOR: ${segment.hp}`, '#ff0055');
-    }
-}
-
-function executeBulletDeflection(scene, bullet) {
-    if(!bullet.active) return;
-    bullet.active = false;
-    bullet.destroy(); score += 50; uiScore.setText(score);
-    particles.setParticleTint(C_BULLET); particles.emitParticleAt(bullet.x, bullet.y, 10);
-    playSound('deflect');
-    if (upgDeflect > 0 && Phaser.Math.Between(1, 100) <= (upgDeflect * 15)) spawnShardBankPayout(scene, bullet.x, bullet.y, 1);
-}
-
-function startHandcraftedLevel(scene) {
-    uiLevel.setText(`STAGE ${currentLevel}`);
-    enemies.clear(true, true); bullets.clear(true, true); bossGroup.clear(true, true); laserWalls.clear(true, true);
-
-    if (currentLevel === 1) {
-        spawnTarget(scene, 100, 200, 'GRUNT', 40); spawnTarget(scene, 300, 200, 'GRUNT', 40); spawnTarget(scene, 200, 350, 'GRUNT', 40);
-    } else if (currentLevel === 2) {
-        spawnTarget(scene, 100, 200, 'GRUNT', 50); spawnTarget(scene, 300, 200, 'GRUNT', 50); spawnTarget(scene, 200, 150, 'RUNNER', 90);
-    } else if (currentLevel === 3) {
-        spawnStaticLaser(scene, 200, 250, 300, 8); 
-        spawnTarget(scene, 100, 150, 'GRUNT', 40); spawnTarget(scene, 300, 150, 'GRUNT', 40); spawnTarget(scene, 200, 350, 'RUNNER', 100);
-    } else if (currentLevel === 4) {
-        spawnTarget(scene, 100, 150, 'SHOOTER', 30); spawnTarget(scene, 300, 150, 'SHOOTER', 30);
-    } else if (currentLevel === 5) {
-        let b = scene.add.sprite(200, 200, useSprites ? 'enemies_raw' : 'tex_boss');
-        if(useSprites) {
-            b.setCrop((b.width/3)*2, 0, b.width/3, b.height); 
-            b.displayHeight = 100; b.scaleX = b.scaleY;
-        }
-        scene.physics.add.existing(b);
-        b.body.setCircle(35, 10, 10); b.hp = 8; b.nextFire = scene.time.now + 1000; bossGroup.add(b);
-        spawnFloatingText(scene, 200, 110, '!!! CORE SENTINEL !!!', '#ff0055');
-    } else {
-        if(Phaser.Math.Between(0,100) > 50) spawnRotatingLaser(scene, 200, 350, 200, 8, 1.5);
-        else spawnStaticLaser(scene, 200, Phaser.Math.Between(200, 400), 250, 8);
-        let total = Math.min(18, 3 + Math.floor(currentLevel * 0.6));
-        for (let i = 0; i < total; i++) {
-            let rx = Phaser.Math.Between(40, 360), ry = Phaser.Math.Between(100, 500);
-            let typeChance = Phaser.Math.Between(0, 100);
-            if (typeChance < 30) spawnTarget(scene, rx, ry, 'RUNNER', 100 + currentLevel);
-            else if (typeChance > 80) spawnTarget(scene, rx, ry, 'SHOOTER', 35);
-            else spawnTarget(scene, rx, ry, 'GRUNT', 60 + currentLevel);
-        }
-    }
-}
-
-function spawnTarget(scene, x, y, type, speed) {
-    let e = scene.add.sprite(x, y, useSprites ? 'enemies_raw' : (type==='GRUNT'?'tex_grunt':type==='RUNNER'?'tex_runner':'tex_shooter'));
+function spawnActor(scene, x, y, type, speed) {
+    let sheet = (type==='SHIELD'||type==='SHOOTER') ? 'tier2' : 'tier1';
+    let e = scene.add.sprite(x, y, useSprites ? sheet : '');
     if(useSprites) {
-        if(type === 'GRUNT' || type === 'SHIELD') e.setCrop(0, 0, e.width/3, e.height);
-        if(type === 'RUNNER') e.setCrop(e.width/3, 0, e.width/3, e.height);
-        if(type === 'SHOOTER') e.setCrop((e.width/3)*2, 0, e.width/3, e.height);
-        e.displayHeight = 65; // SCALED UP
-        e.scaleX = e.scaleY; 
+        if(type === 'GRUNT') e.setCrop(0,0,e.width/2,e.height);
+        if(type === 'RUNNER') e.setCrop(e.width/2,0,e.width/2,e.height);
+        if(type === 'SHIELD') { e.setCrop(0,0,e.width/2,e.height); e.setTint(0x88ffff); }
+        if(type === 'SHOOTER') e.setCrop(e.width/2,0,e.width/2,e.height);
+        // MODIFIED: Scaled up enemies
+        e.displayHeight = 85; e.scaleX = e.scaleY;
+    } else {
+        e = scene.add.rectangle(x, y, 20, 20, 0xff0055);
     }
     
-    scene.physics.add.existing(e); 
-    e.body.setCircle(16, 5, 5);
-    
-    if(type === 'SHIELD') { if(!useSprites) e.setTexture('tex_grunt'); e.setTint(0x00ffff); e.isBroken = false; }
+    scene.physics.add.existing(e); e.body.setCircle(20); // Scaled hitbox
+    if(type === 'SHIELD') e.isBroken = false;
     if(type === 'SHOOTER') e.nextFire = scene.time.now + 1000;
     
     e.eType = type; e.speedData = speed; enemies.add(e);
 }
 
-function fireLaserProjectile(scene, sx, sy, tx, ty, speed) {
-    let b = scene.add.rectangle(sx, sy, 8, 8, C_BULLET); scene.physics.add.existing(b); scene.physics.moveTo(b, tx, ty, speed); bullets.add(b);
-}
-function spawnStaticLaser(scene, x, y, w, h) {
-    let l = scene.add.rectangle(x, y, w, h, 0xff0000).setAlpha(0.7); scene.physics.add.existing(l); lasers.add(l); laserWalls.add(l);
-}
-function spawnRotatingLaser(scene, x, y, w, h, speed) {
-    let l = scene.add.rectangle(x, y, w, h, 0xff0000).setAlpha(0.7); scene.physics.add.existing(l); l.rotSpeed = speed; laserWalls.add(l);
-}
-
-function evaluateLevelCompletion(scene) {
-    if (enemies.countActive() === 0 && bossGroup.countActive() === 0 && !isGameOver) {
-        if (combo === enemiesAtStartOfDash) {
-            score += 1500; uiScore.setText(score);
-            spawnFloatingText(scene, 200, 320, 'PERFECT ONE SLASH\n+1500', '#00ffff');
-        }
-        currentLevel++;
-        scene.time.delayedCall(800, () => startHandcraftedLevel(scene));
+function spawnBoss(scene) {
+    let b = scene.add.sprite(200, -50, useSprites ? 'bosses' : '');
+    if(useSprites) {
+        let frame = Phaser.Math.Between(0, 2);
+        b.setCrop(frame*(b.width/3), 0, b.width/3, b.height);
+        // MODIFIED: Scaled up boss massively
+        b.displayHeight = 160; b.scaleX = b.scaleY;
+    } else {
+        b = scene.add.circle(200, 100, 50, 0xff0000);
     }
+    scene.physics.add.existing(b); b.body.setCircle(55); // Scaled hitbox
+    
+    // Smooth entry
+    scene.tweens.add({ targets: b, y: 150, duration: 2000, ease: 'Power2' });
+    
+    b.hp = 12 + (waveDifficulty * 6); b.nextFire = scene.time.now + 2000; bosses.add(b);
+    scene.cameras.main.flash(200, 255, 0, 0); 
 }
 
-// --- UTILS & MENUS ---
-function spawnShardBankPayout(scene, x, y, count) {
-    for (let i = 0; i < count; i++) {
-        let s = scene.add.rectangle(x, y, 6, 6, C_SHARD);
-        scene.tweens.add({ targets: s, x: x + Phaser.Math.Between(-30, 30), y: y + Phaser.Math.Between(-30, 30), duration: 150, onComplete: () => {
-            scene.tweens.add({ targets: s, x: 360, y: 35, duration: 400, ease: 'Back.easeIn', onComplete: () => {
-                totalShards++; localStorage.setItem('ninja_shards', totalShards); uiShards.setText('◆' + totalShards); s.destroy();
-            }});
-        }});
-    }
+function fireProjectile(scene, sx, sy, tx, ty, speed) {
+    let b = scene.add.rectangle(sx, sy, 10, 10, C_BULLET); scene.physics.add.existing(b); scene.physics.moveTo(b, tx, ty, speed); bullets.add(b);
 }
 
-function triggerFloatingComboPhrase(scene, x, y, points) {
-    let phrase = `+${points}`;
-    if (combo >= 12) phrase = `LEGENDARY!\n+${points}`; else if (combo >= 8) phrase = `AWESOME!\n+${points}`; else if (combo >= 4) phrase = `GREAT!\n+${points}`;
-    spawnFloatingText(scene, x, y, phrase, '#ffff00');
-}
-function spawnFloatingText(scene, x, y, msg, color) {
-    let t = scene.add.text(x, y, msg, { font: 'bold 14px Courier', fill: color, align: 'center' }).setOrigin(0.5).setDepth(15);
-    t.setShadow(0, 0, color, 8, false, true); scene.tweens.add({ targets: t, y: y - 40, alpha: 0, duration: 700, onComplete: () => t.destroy() });
-}
+// --- MATH COMBAT ENGINE ---
+function executeSlash(scene) {
+    isDashing = true; isInvulnerable = true; 
+    playSound('slash');
+    
+    if(useSprites) player.setCrop((player.width/3)*2, 0, player.width/3, player.height); 
+    
+    pathGraphics.clear(); trailGraphics.clear();
+    let thickness = 16 + (statRadius * 6);
+    trailGraphics.lineStyle(thickness, 0x00ffff, 1);
+    trailGraphics.beginPath(); trailGraphics.moveTo(currentPath[0].x, currentPath[0].y);
+    currentPath.forEach(pt => trailGraphics.lineTo(pt.x, pt.y)); trailGraphics.strokePath();
 
-function handleFatalImpact(scene, x, y) {
-    if(isGameOver || isInvulnerable) return;
-    isGameOver = true; player.setVisible(false);
-    playSound('crash');
-    particles.setParticleTint(0xffffff); particles.emitParticleAt(player.x, player.y, 40);
-    scene.cameras.main.shake(250, 0.05);
+    // MODIFIED: Increased intersection radius to match new large visuals
+    let hitRadius = 35 + (statRadius * 5); 
 
-    updateTerminalDisplayLayout();
-    scene.time.delayedCall(500, () => { gameOverContainer.setVisible(true); });
-}
+    for (let i = 0; i < currentPath.length - 1; i++) {
+        let line = new Phaser.Geom.Line(currentPath[i].x, currentPath[i].y, currentPath[i+1].x, currentPath[i+1].y);
 
-function buildMetaUpgradeTerminal(scene) {
-    gameOverContainer = scene.add.container(200, 350).setDepth(20).setVisible(false);
-    let bg = scene.add.rectangle(0, 0, 340, 560, 0x010106, 0.98).setStrokeStyle(2, 0xff0055);
-    let title = scene.add.text(0, -240, 'SYSTEM OVERRIDE', { font: 'bold 24px Courier', fill: '#ff0055' }).setOrigin(0.5);
-    let stats = scene.add.text(0, -190, '', { font: 'bold 16px Courier', fill: '#ffffff', align: 'center' }).setOrigin(0.5).setName('statsText');
-    gameOverContainer.add([bg, title, stats]);
+        enemies.getChildren().forEach(enemy => {
+            if(!enemy.active) return;
+            if (Phaser.Geom.Intersects.LineToCircle(line, new Phaser.Geom.Circle(enemy.x, enemy.y, hitRadius + 15))) killEnemy(scene, enemy);
+        });
 
-    let upgData = [ { name: 'SLASH RADIUS', key: 'radius', get: () => upgRadius, set: (v) => upgRadius = v }, { name: 'COMBO BOOST', key: 'combo', get: () => upgCombo, set: (v) => upgCombo = v }, { name: 'DEFLECT INCOME', key: 'deflect', get: () => upgDeflect, set: (v) => upgDeflect = v } ];
-    upgData.forEach((u, idx) => {
-        let btnY = -80 + (idx * 60);
-        let btn = scene.add.rectangle(0, btnY, 280, 45, 0x0a0a20).setStrokeStyle(1, 0x333366).setInteractive();
-        let txt = scene.add.text(0, btnY, '', { font: 'bold 12px Courier', fill: '#fff' }).setOrigin(0.5);
-        btn.on('pointerdown', () => {
-            let currentLvl = u.get(); if (currentLvl >= 5) return;
-            let cost = (currentLvl + 1) * 35;
-            if (totalShards >= cost) {
-                totalShards -= cost; u.set(currentLvl + 1);
-                localStorage.setItem('ninja_shards', totalShards); localStorage.setItem(`upg_${u.key}`, u.get());
-                uiShards.setText('◆' + totalShards); updateTerminalDisplayLayout();
+        bullets.getChildren().forEach(bullet => {
+            if(!bullet.active) return;
+            if (Phaser.Geom.Intersects.LineToCircle(line, new Phaser.Geom.Circle(bullet.x, bullet.y, hitRadius + 10))) {
+                bullet.active = false; bullet.destroy(); score += 50; uiScore.setText('SCORE: ' + score); playSound('item');
             }
         });
-        gameOverContainer.add([btn, txt]); u.btnRef = btn; u.txtRef = txt;
-    });
-    gameOverContainer.upgData = upgData;
 
-    let adBtn = scene.add.rectangle(0, 130, 280, 45, 0x150a0a).setStrokeStyle(1, 0xff5500).setInteractive();
-    let adTxt = scene.add.text(0, 130, '🎬 WATCH AD: FREE REVIVE', { font: 'bold 12px Courier', fill: '#ff5500' }).setOrigin(0.5);
-    adBtn.on('pointerdown', () => {
-        if (hasRevived) return;
-        hasRevived = true; isGameOver = false; isInvulnerable = true;
-        player.setPosition(200, 600).setVisible(true);
-        if(useSprites) player.setCrop(0, 0, player.width/4, player.height);
-        scene.time.delayedCall(1500, () => { isInvulnerable = false; }); 
-        gameOverContainer.setVisible(false); spawnFloatingText(scene, 200, 350, 'SYSTEM RESTORED', '#00ffff');
-    });
-    gameOverContainer.add([adBtn, adTxt]); gameOverContainer.adBtn = adBtn; gameOverContainer.adTxt = adTxt;
+        bosses.getChildren().forEach(boss => {
+            if(!boss.active) return;
+            if (Phaser.Geom.Intersects.LineToCircle(line, new Phaser.Geom.Circle(boss.x, boss.y, hitRadius + 50))) damageBoss(scene, boss);
+        });
 
-    let retryBtn = scene.add.rectangle(0, 210, 280, 55, 0x00ffff, 0.1).setStrokeStyle(2, 0x00ffff).setInteractive();
-    let retryTxt = scene.add.text(0, 210, '> REBOOT CORE <', { font: 'bold 18px Courier', fill: '#00ffff' }).setOrigin(0.5);
-    scene.tweens.add({ targets: [retryBtn, retryTxt], alpha: { from: 1, to: 0.7 }, scale: { from: 1, to: 1.05 }, yoyo: true, repeat: -1, duration: 800, ease: 'Sine.easeInOut' });
-    retryBtn.on('pointerdown', () => {
-        isGameOver = false; score = 0; currentLevel = 1; hasRevived = false; isInvulnerable = true; uiScore.setText('0');
-        player.setPosition(200, 600).setVisible(true);
-        if(useSprites) player.setCrop(0, 0, player.width/4, player.height);
-        scene.time.delayedCall(1000, () => { isInvulnerable = false; });
-        gameOverContainer.setVisible(false); startHandcraftedLevel(scene);
+        items.getChildren().forEach(item => {
+            if(!item.active) return;
+            if (Phaser.Geom.Intersects.LineToCircle(line, new Phaser.Geom.Circle(item.x, item.y, hitRadius + 20))) collectItem(scene, item);
+        });
+    }
+
+    let lastPoint = currentPath[currentPath.length - 1];
+    if (useSprites) player.flipX = lastPoint.x < player.x;
+    player.setPosition(lastPoint.x, lastPoint.y);
+    currentPath = [];
+
+    scene.time.delayedCall(50, () => { 
+        isDashing = false; 
+        if(STATE === 'PLAYING' && useSprites) player.setCrop(0, 0, player.width/3, player.height); 
     });
-    gameOverContainer.add([retryBtn, retryTxt]);
+    scene.time.delayedCall(250, () => { isInvulnerable = false; });
+    scene.tweens.add({ targets: trailGraphics, alpha: 0, duration: 150, onComplete: () => { trailGraphics.clear(); trailGraphics.setAlpha(1); } });
 }
 
-function updateTerminalDisplayLayout() {
-    gameOverContainer.getByName('statsText').setText(`STAGE REACHED: ${currentLevel}\nTOTAL DATA: ${score}`);
-    gameOverContainer.upgData.forEach(u => {
-        let lvl = u.get();
-        if (lvl >= 5) { u.txtRef.setText(`${u.name}: MAX LEVEL`); u.btnRef.setStrokeStyle(2, 0x00ff88); } 
-        else { let cost = (lvl + 1) * 35; u.txtRef.setText(`UPGRADE ${u.name} (LVL ${lvl}/5)\nCOST: ◆${cost}`); u.btnRef.setStrokeStyle(1, totalShards >= cost ? 0x00ffff : 0x442222); }
+function killEnemy(scene, enemy) {
+    if(!enemy.active) return;
+    if (enemy.eType === 'SHIELD' && !enemy.isBroken) { enemy.isBroken = true; enemy.clearTint(); return; }
+    
+    enemy.active = false; 
+    score += Math.floor(100 * statCombo); uiScore.setText('SCORE: ' + score); playSound('hit');
+    scene.cameras.main.shake(40, 0.01);
+    
+    spawnItem(scene, enemy.x, enemy.y);
+    enemy.destroy();
+}
+
+function damageBoss(scene, boss) {
+    if(!boss.active || boss.invuln) return;
+    boss.hp -= statCombo; boss.invuln = true; scene.time.delayedCall(100, () => boss.invuln = false); 
+    scene.cameras.main.shake(80, 0.02); playSound('hit');
+
+    if (boss.hp <= 0) {
+        boss.active = false; score += 5000; uiScore.setText('SCORE: ' + score);
+        for(let i=0; i<10; i++) spawnItem(scene, boss.x + Phaser.Math.Between(-40,40), boss.y + Phaser.Math.Between(-40,40), true);
+        boss.destroy();
+    }
+}
+
+// --- ECONOMY & LEVELING ---
+function spawnItem(scene, x, y, forceGem = false) {
+    let r = Math.random();
+    let type = 'EXP'; let frame = 0;
+    
+    if (forceGem || r > 0.95) { type = 'GEM'; frame = 1; }
+    else if (r > 0.92) { type = 'MAGNET'; frame = 2; }
+    else if (r > 0.89) { type = 'SHIELD'; frame = 3; }
+
+    let i = scene.add.sprite(x, y, useSprites ? 'items' : '');
+    if(useSprites) { 
+        i.setCrop(frame*(i.width/5), 0, i.width/5, i.height); 
+        // MODIFIED: Scaled up items
+        i.displayHeight = 35; i.scaleX = i.scaleY; 
+    } else { 
+        i = scene.add.rectangle(x, y, 15, 15, type==='EXP'?0x0088ff:0xff00aa); 
+    }
+    
+    scene.physics.add.existing(i); i.body.setCircle(15); i.iType = type; items.add(i);
+}
+
+function collectItem(scene, item) {
+    item.active = false; playSound('item');
+    if (item.iType === 'EXP') {
+        currentExp++;
+        let fillWidth = (currentExp / maxExp) * 380;
+        scene.tweens.add({ targets: uiExpFill, width: fillWidth, duration: 100 });
+        if (currentExp >= maxExp) triggerLevelUp(scene);
+    } else if (item.iType === 'GEM') {
+        totalGems++; localStorage.setItem('ninja_gems', totalGems); uiGems.setText('💎 ' + totalGems);
+    } else if (item.iType === 'MAGNET') {
+        activePowerups.magnet = scene.time.now + 8000; 
+    } else if (item.iType === 'SHIELD') {
+        activePowerups.shield = true; player.setTint(0x00ffff);
+    }
+    item.destroy();
+}
+
+function triggerLevelUp(scene) {
+    STATE = 'LEVELUP'; playSound('levelup');
+    levelUpMenu.setVisible(true);
+}
+
+// --- STATE MACHINES & MENUS ---
+function handleFatalImpact(scene) {
+    if(activePowerups.shield) {
+        activePowerups.shield = false; player.clearTint();
+        isInvulnerable = true; scene.time.delayedCall(1500, () => isInvulnerable = false);
+        scene.cameras.main.flash(200, 0, 255, 255); playSound('slash'); return;
+    }
+    STATE = 'GAMEOVER'; playSound('crash'); player.setVisible(false); scene.cameras.main.shake(300, 0.05);
+    gameOverMenu.getByName('stats').setText(`WAVE LIVED: ${waveDifficulty}\nSCORE: ${score}`);
+    scene.time.delayedCall(800, () => gameOverMenu.setVisible(true));
+}
+
+function triggerPause(scene) {
+    STATE = 'PAUSED'; pauseMenu.setVisible(true);
+}
+
+function buildMenus(scene) {
+    // 1. PAUSE MENU
+    pauseMenu = scene.add.container(200, 350).setDepth(100).setVisible(false);
+    let pBg = scene.add.rectangle(0, 0, 300, 200, 0x000000, 0.9).setStrokeStyle(2, 0xffffff);
+    let pTxt = scene.add.text(0, -50, 'PAUSED', { font: 'bold 24px Courier', fill: '#fff' }).setOrigin(0.5);
+    let pBtn = scene.add.text(0, 30, '> RESUME <', { font: 'bold 20px Courier', fill: '#00ffff' }).setOrigin(0.5).setInteractive();
+    pBtn.on('pointerdown', () => { pauseMenu.setVisible(false); STATE = 'PLAYING'; });
+    pauseMenu.add([pBg, pTxt, pBtn]);
+
+    // 2. LEVEL UP MENU
+    levelUpMenu = scene.add.container(200, 350).setDepth(100).setVisible(false);
+    let lBg = scene.add.rectangle(0, 0, 340, 400, 0x010111, 0.95).setStrokeStyle(2, 0x0088ff);
+    let lTxt = scene.add.text(0, -150, 'SYSTEM UPGRADE', { font: 'bold 24px Courier', fill: '#0088ff' }).setOrigin(0.5);
+    levelUpMenu.add([lBg, lTxt]);
+
+    let upgrades = [
+        { text: 'INCREASE BLADE RADIUS', action: () => statRadius++ },
+        { text: 'INCREASE COMBO DAMAGE', action: () => statCombo += 0.5 },
+        { text: 'FULL HEALTH SHIELD', action: () => { activePowerups.shield = true; player.setTint(0x00ffff); } }
+    ];
+
+    upgrades.forEach((u, i) => {
+        let card = scene.add.rectangle(0, -50 + (i*80), 280, 60, 0x0a0a22).setStrokeStyle(1, 0x00ffff).setInteractive();
+        let txt = scene.add.text(0, -50 + (i*80), u.text, { font: '14px Courier', fill: '#fff' }).setOrigin(0.5);
+        card.on('pointerdown', () => {
+            u.action();
+            currentExp = 0; maxExp = Math.floor(maxExp * 1.5); 
+            uiExpFill.width = 0; levelUpMenu.setVisible(false); STATE = 'PLAYING';
+        });
+        levelUpMenu.add([card, txt]);
     });
-    if (hasRevived) { gameOverContainer.adBtn.setAlpha(0.2).disableInteractive(); gameOverContainer.adTxt.setText('REVIVE UNAVAILABLE'); } 
-    else { gameOverContainer.adBtn.setAlpha(1).setInteractive(); gameOverContainer.adTxt.setText('🎬 WATCH AD: FREE REVIVE'); }
+
+    // 3. GAME OVER MENU
+    gameOverMenu = scene.add.container(200, 350).setDepth(100).setVisible(false);
+    let gBg = scene.add.rectangle(0, 0, 340, 450, 0x110000, 0.95).setStrokeStyle(2, 0xff0055);
+    let gTxt = scene.add.text(0, -180, 'SYSTEM FAILURE', { font: 'bold 24px Courier', fill: '#ff0055' }).setOrigin(0.5);
+    let gStats = scene.add.text(0, -120, '', { font: '16px Courier', fill: '#fff', align:'center' }).setOrigin(0.5).setName('stats');
+    gameOverMenu.add([gBg, gTxt, gStats]);
+
+    let adBtn = scene.add.rectangle(0, -10, 280, 50, 0x221100).setStrokeStyle(1, 0xff5500).setInteractive();
+    let adTxt = scene.add.text(0, -10, '🎬 WATCH AD: REVIVE', { font: 'bold 14px Courier', fill: '#ff5500' }).setOrigin(0.5);
+    
+    let gemBtn = scene.add.rectangle(0, 60, 280, 50, 0x220022).setStrokeStyle(1, 0xff00aa).setInteractive();
+    let gemTxt = scene.add.text(0, 60, '💎 SPEND 10 GEMS: REVIVE', { font: 'bold 14px Courier', fill: '#ff00aa' }).setOrigin(0.5);
+
+    let restartBtn = scene.add.text(0, 160, '> NEW RUN <', { font: 'bold 20px Courier', fill: '#00ffff' }).setOrigin(0.5).setInteractive();
+
+    adBtn.on('pointerdown', () => revivePlayer(scene));
+    gemBtn.on('pointerdown', () => {
+        if(totalGems >= 10) { totalGems -= 10; localStorage.setItem('ninja_gems', totalGems); uiGems.setText('💎 ' + totalGems); revivePlayer(scene); }
+    });
+    restartBtn.on('pointerdown', () => {
+        score = 0; currentExp = 0; maxExp = 5; runLevel = 1; waveDifficulty = 1; statRadius = 1; statCombo = 1; uiScore.setText('SCORE: 0'); uiExpFill.width = 0;
+        enemies.clear(true, true); bullets.clear(true, true); bosses.clear(true, true); items.clear(true, true);
+        player.setPosition(200, 550).setVisible(true).clearTint(); activePowerups.shield = false;
+        gameOverMenu.setVisible(false); STATE = 'PLAYING';
+    });
+
+    gameOverMenu.add([adBtn, adTxt, gemBtn, gemTxt, restartBtn]);
+}
+
+function revivePlayer(scene) {
+    player.setPosition(200, 550).setVisible(true);
+    isInvulnerable = true; scene.time.delayedCall(2000, () => isInvulnerable = false); 
+    enemies.clear(true, true); bullets.clear(true, true); 
+    gameOverMenu.setVisible(false); STATE = 'PLAYING';
 }
 </script>
 </body>
